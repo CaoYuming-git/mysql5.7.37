@@ -2285,6 +2285,9 @@ trx_assign_read_view(
 		return(NULL);
 
 	} else if (!MVCC::is_view_active(trx->read_view)) {
+        /*只有事务中的readview无效时才重新生成
+         * 当ISO<=RC时，每个查询SQL语句执行时，trx->read_view都会清空，所以每次都会重新生成readview
+         * 当ISO>=RR时，第一个查询SQL语句执行时，trx->read_view为空，需要生成readview，但是后面的查询SQL语句不会清空trx->read_view，所以后面查询时不会重新生成readview*/
 		trx_sys->mvcc->view_open(trx->read_view, trx);
 	}
 

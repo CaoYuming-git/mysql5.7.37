@@ -7462,7 +7462,11 @@ int handler::read_range_next()
   result= ha_index_next(table->record[0]);
   if (result)
     DBUG_RETURN(result);
-
+  /*注意：正常索引到记录时：
+   * 1）如果是二级索引，则会在innodb层进行ICP判断是否超出范围，如果超出则会result返回超出错误码，跳过后续步骤到server层处理
+   * 2）如果是主健索引，则innodb层ICP判断会跳过，所以超出范围不会在innodb层处理，所以result会返回0表示没有问题，然后会在下面代码中判断是否超出了索引范围，如果超出了会解锁，并返回给server超出错误码
+   * */
+  /*当不报错时执行后续步骤，检查记录所属范围是否已经超出了检索区间*/
   if (compare_key(end_range) <= 0)
   {
     DBUG_RETURN(0);
@@ -7473,6 +7477,7 @@ int handler::read_range_next()
       The last read row does not fall in the range. So request
       storage engine to release row lock if possible.
     */
+    /*当超出检索区间，说明这是查询的最后一条记录，也是第一条不符合索引条件的记录，进行行记录解锁操作(当ISO<=RC时解锁，ISO>=RR时不解锁)*/
     unlock_row();
     DBUG_RETURN(HA_ERR_END_OF_FILE);
   }

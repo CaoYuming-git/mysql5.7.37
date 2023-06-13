@@ -40,6 +40,7 @@ typedef struct st_position POSITION;
    functions).
    All values except NESTED_LOOP_OK abort the nested loop.
 */
+/*除了NESTED_LOOP_OK都会终止嵌套循环*/
 enum enum_nested_loop_state
 {
   /**

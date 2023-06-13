@@ -1275,15 +1275,17 @@ sub_select(JOIN *join, QEP_TAB *const qep_tab,bool end_of_records)
   const bool pfs_batch_update= qep_tab->pfs_batch_update(join);
   if (pfs_batch_update)
     qep_tab->table()->file->start_psi_batch_mode();
+  /*除了NESTED_LOOP_OK都会终止嵌套循环*/
   while (rc == NESTED_LOOP_OK && join->return_tab >= qep_tab_idx)
   {
     int error;
     if (in_first_read)
     {
       in_first_read= false;
+      /*读取第一条记录*/
       error= (*qep_tab->read_first_record)(qep_tab);
     }
-    else
+    else/*读取下一条记录*/
       error= info->read_record(info);
 
     DBUG_EXECUTE_IF("bug13822652_1", join->thd->killed= THD::KILL_QUERY;);
@@ -1301,6 +1303,9 @@ sub_select(JOIN *join, QEP_TAB *const qep_tab,bool end_of_records)
     {
       if (qep_tab->keep_current_rowid)
         qep_tab->table()->file->position(qep_tab->table()->record[0]);
+      /* 存储引擎根据索引条件成功返回记录后，再进行判断where条件
+       * 如果满足则继续查询关联的下一张表
+       * 不满足则进行解锁操作。解锁操作都是调用unlock_row函数，此函数只有当ISO <= RC时才会解锁 */
       rc= evaluate_join_record(join, qep_tab);
     }
   }
@@ -1495,7 +1500,7 @@ evaluate_join_record(JOIN *join, QEP_TAB *const qep_tab)
               qep_tab->table()->alias, condition));
 
   if (condition)
-  {
+  { /*校验where条件*/
     found= MY_TEST(condition->val_int());
 
     if (join->thd->killed)
@@ -1648,7 +1653,7 @@ evaluate_join_record(JOIN *join, QEP_TAB *const qep_tab)
       enum enum_nested_loop_state rc;
       // A match is found for the current partial join prefix.
       qep_tab->found_match= true;
-
+      /*关联查询下一张表*/
       rc= (*qep_tab->next_select)(join, qep_tab+1, 0);
       join->thd->get_stmt_da()->inc_current_row_for_condition();
       if (rc != NESTED_LOOP_OK)
@@ -1701,7 +1706,7 @@ evaluate_join_record(JOIN *join, QEP_TAB *const qep_tab)
     }
   }
   else
-  {
+  { /*不符合where条件*/
     /*
       The condition pushed down to the table join_tab rejects all rows
       with the beginning coinciding with the current partial join.
@@ -1709,6 +1714,7 @@ evaluate_join_record(JOIN *join, QEP_TAB *const qep_tab)
     join->examined_rows++;
     join->thd->get_stmt_da()->inc_current_row_for_condition();
     if (qep_tab->not_null_compl)
+        /*解锁行记录(当ISO <= RC时解锁，当ISO >= RR时不解锁)*/
       qep_tab->read_record.unlock_row(qep_tab);
   }
   DBUG_RETURN(NESTED_LOOP_OK);

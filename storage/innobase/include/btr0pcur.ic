@@ -60,6 +60,7 @@ btr_pcur_get_btr_cur(
 /*=================*/
 	const btr_pcur_t*	cursor)	/*!< in: persistent cursor */
 {
+	/*从持久化游标cursor(包含B树游标和B树游标之前指向的数据页和记录等等)中获取B树游标btr_cur*/
 	const btr_cur_t*	btr_cur = &cursor->btr_cur;
 	return((btr_cur_t*) btr_cur);
 }
@@ -514,7 +515,7 @@ btr_pcur_open_with_no_init_func(
 	cursor->search_mode = mode;
 
 	/* Search with the tree cursor */
-
+    /*从持久化游标cursor中获取B树游标btr_cursor*/
 	btr_cursor = btr_pcur_get_btr_cur(cursor);
 
 	if (dict_table_is_intrinsic(index->table)) {
@@ -525,6 +526,7 @@ btr_pcur_open_with_no_init_func(
 			file, line, mtr,
 			((latch_mode & BTR_MODIFY_LEAF) ? true : false));
 	} else {
+		/*定位到满足条件的叶子节点(level=0)的记录上，B树游标btr_cursor指向此定位到的记录上*/
 		btr_cur_search_to_nth_level(
 			index, 0, tuple, mode, latch_mode, btr_cursor,
 			has_search_latch, file, line, mtr);

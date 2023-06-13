@@ -992,20 +992,21 @@ page_rec_get_prev_const(
 	const page_t*		page;
 
 	ut_ad(page_rec_check(rec));
-
+    /*记录所在页*/
 	page = page_align(rec);
 
 	ut_ad(!page_rec_is_infimum(rec));
-
+    /*记录所在槽id*/
 	slot_no = page_dir_find_owner_slot(rec);
 
 	ut_a(slot_no != 0);
-
+    /*找到记录所在槽的前一个槽*/
 	slot = page_dir_get_nth_slot(page, slot_no - 1);
-
+    /*前一个槽中最大的记录位置X*/
 	rec2 = page_dir_slot_get_rec(slot);
 
 	if (page_is_comp(page)) {
+        /*从前一个槽的最大记录X向后遍历，直到当前记录rec的前一个记录*/
 		while (rec != rec2) {
 			prev_rec = rec2;
 			rec2 = page_rec_get_next_low(rec2, TRUE);

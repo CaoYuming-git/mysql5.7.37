@@ -928,7 +928,7 @@ btr_cur_search_to_nth_level(
 	    will have to check it again. */
 	    && UNIV_LIKELY(btr_search_enabled)
 	    && !modify_external
-	    && btr_search_guess_on_hash(index, info, tuple, mode,
+	    && btr_search_guess_on_hash(index, info, tuple, mode,/*使用AHI查询*/
 					latch_mode, cursor,
 					has_search_latch, mtr)) {
 
@@ -941,7 +941,7 @@ btr_cur_search_to_nth_level(
 		ut_ad(cursor->low_match != ULINT_UNDEFINED
 		      || mode != PAGE_CUR_LE);
 		btr_cur_n_sea++;
-
+       /*使用AHI查询，如果查询成功，则直接返回*/
 		DBUG_VOID_RETURN;
 	}
 	btr_cur_n_non_sea++;
@@ -1021,7 +1021,7 @@ btr_cur_search_to_nth_level(
 	root_leaf_rw_latch = btr_cur_latch_for_root_leaf(latch_mode);
 
 	page_cursor = btr_cur_get_page_cur(cursor);
-
+    // 初始化root page_id
 	const ulint		space = dict_index_get_space(index);
 	const page_size_t	page_size(dict_table_page_size(index->table));
 
@@ -1434,12 +1434,14 @@ retry_page_get:
 		for leaf pages (height==0), but not in r-trees.
 		We only need the byte prefix comparison for the purpose
 		of updating the adaptive hash index. */
+        /*如果使用了AHI时，在索引页内查找对于指定的记录的方法*/
 		page_cur_search_with_match_bytes(
 			block, index, tuple, page_mode, &up_match, &up_bytes,
 			&low_match, &low_bytes, page_cursor);
 	} else {
 		/* Search for complete index fields. */
 		up_bytes = low_bytes = 0;
+        /*在索引页内查找对于指定的记录(包含了二分查找)*/
 		page_cur_search_with_match(
 			block, index, tuple, page_mode, &up_match,
 			&low_match, page_cursor,

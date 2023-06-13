@@ -1012,7 +1012,7 @@ bool SELECT_LEX::optimize(THD *thd)
     DBUG_RETURN(true);  /* purecov: inspected */
 
   set_join(join_local);
-
+  /*优化器进行进行SQL语法优化，以及生成执行计划*/
   if (join->optimize())
     DBUG_RETURN(true);
 
@@ -2265,7 +2265,7 @@ make_join_readinfo(JOIN *join, uint no_jbuf_after)
           assert(qep_tab->quick()->index != MAX_KEY);
           table->set_keyread(TRUE);
         }
-        if (!table->key_read)
+        if (!table->key_read)/*设置索引条件下推相关参数*/
           qep_tab->push_index_cond(tab, qep_tab->quick()->index,
                                    &trace_refine_table);
       }

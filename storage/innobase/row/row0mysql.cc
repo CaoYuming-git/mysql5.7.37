@@ -2754,6 +2754,8 @@ row_unlock_for_mysql(
 
 	trx->op_info = "unlock_row";
 
+	/*new_rec_locks = 1表示ISO<=RC,且只在当前搜索的索引上加锁
+	 *new_rec_locks=2表示ISO<=RC,且在当前搜索的索引和主键(回表了，所以在主键上页加了锁)上都加了锁*/
 	if (prebuilt->new_rec_locks >= 1) {
 
 		const rec_t*	rec;
@@ -2812,12 +2814,12 @@ row_unlock_for_mysql(
 				mem_heap_free(heap);
 			}
 		}
-
+        //表示当前事务没有更新当前记录，进行解锁
 		if (rec_trx_id != trx->id) {
 			/* We did not update the record: unlock it */
 
 			rec = btr_pcur_get_rec(pcur);
-
+            //对查询的索引加的锁进行解锁
 			lock_rec_unlock(
 				trx,
 				btr_pcur_get_block(pcur),
@@ -2826,6 +2828,7 @@ row_unlock_for_mysql(
 					prebuilt->select_lock_type));
 
 			if (prebuilt->new_rec_locks >= 2) {
+				//对回表后在主键索引上加的锁进行解锁
 				rec = btr_pcur_get_rec(clust_pcur);
 
 				lock_rec_unlock(

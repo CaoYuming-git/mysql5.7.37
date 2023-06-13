@@ -7618,6 +7618,8 @@ no_commit:
 	m_num_write_row++;
 
 	/* Step-3: Handling of Auto-Increment Columns. */
+
+    /* 处理自增键  */
 	if (table->next_number_field && record == table->record[0]) {
 
 		/* Reset the error code before calling
@@ -7660,6 +7662,7 @@ no_commit:
 	innobase_srv_conc_enter_innodb(m_prebuilt);
 
 	/* Step-5: Execute insert graph that will result in actual insert. */
+    /* 第5步是实际的真正插入操作 */
 	error = row_insert_for_mysql((byte*) record, m_prebuilt);
 
 	DEBUG_SYNC(m_user_thd, "ib_after_row_insert");
@@ -8696,6 +8699,7 @@ ha_innobase::index_read(
 /*====================*/
 	uchar*		buf,		/*!< in/out: buffer for the returned
 					row */
+	/*查找的关键字的值，即进行索引查询的值*/
 	const uchar*	key_ptr,	/*!< in: key value; if this is NULL
 					we position the cursor at the
 					start or end of index; this can
@@ -8745,11 +8749,11 @@ ha_innobase::index_read(
 	if (m_prebuilt->sql_stat_start && !can_reuse_mysql_template()) {
 		build_template(false);
 	}
-
+    /*有查询关键字*/
 	if (key_ptr != NULL) {
 		/* Convert the search key value to InnoDB format into
 		m_prebuilt->search_tuple */
-
+        /* 将搜索的关键字转换为innodb的格式，即 m_prebuilt->search_tuple结构*/
 		row_sel_convert_mysql_key_to_innobase(
 			m_prebuilt->search_tuple,
 			m_prebuilt->srch_key_val1,
@@ -8783,11 +8787,11 @@ ha_innobase::index_read(
 	m_last_match_mode = (uint) match_mode;
 
 	dberr_t		ret;
-
+    /*如果mode不是innodb不支持的模式才进行下一步操作*/
 	if (mode != PAGE_CUR_UNSUPP) {
 
 		innobase_srv_conc_enter_innodb(m_prebuilt);
-
+        /* 如果不是内部表 */
 		if (!dict_table_is_intrinsic(m_prebuilt->table)) {
 
 			if (TrxInInnoDB::is_aborted(m_prebuilt->trx)) {
@@ -8800,7 +8804,7 @@ ha_innobase::index_read(
 
 			m_prebuilt->ins_sel_stmt = thd_is_ins_sel_stmt(
 				m_user_thd);
-
+            /*查询一行记录操作*/
 			ret = row_search_mvcc(
 				buf, mode, m_prebuilt, match_mode, 0);
 
@@ -9099,7 +9103,7 @@ ha_innobase::general_fetch(
 	dberr_t	ret;
 
 	if (!intrinsic) {
-
+        /*select读取第一条记录后，读取后续记录时调用此接口，direction为ROW_SEL_NEXT，表示读取下一条记录，不用重新从根结点进行定位记录*/
 		ret = row_search_mvcc(
 			buf, PAGE_CUR_UNSUPP, m_prebuilt, match_mode,
 			direction);
@@ -9170,7 +9174,7 @@ ha_innobase::index_next(
 				format */
 {
 	ha_statistic_increment(&SSV::ha_read_next_count);
-
+    /*根据读取第一条记录生成的cursor，读取下一条记录*/
 	return(general_fetch(buf, ROW_SEL_NEXT, 0));
 }
 

@@ -822,15 +822,16 @@ lock_rec_has_to_wait(
 {
 	ut_ad(trx && lock2);
 	ut_ad(lock_get_type_low(lock2) == LOCK_REC);
-
+    /* 如果锁的模式lock_mode冲突，才可能有锁冲突，只有当lock_mode冲突时才进行下一步判断是否冲突 */
 	if (trx != lock2->trx
 	    && !lock_mode_compatible(static_cast<lock_mode>(
 			             LOCK_MODE_MASK & type_mode),
 				     lock_get_mode(lock2))) {
-
+        /* 如果锁的模式冲突，进一步判断具体的锁是否冲突。对于行锁，锁模式只有LOCK_S/LOCK_X */
 		/* We have somewhat complex rules when gap type record locks
 		cause waits */
 
+        /* 如果要加的锁是没有插入意向锁标记的GAP锁，不需要等待任何类型的锁 */
 		if ((lock_is_on_supremum || (type_mode & LOCK_GAP))
 		    && !(type_mode & LOCK_INSERT_INTENTION)) {
 
@@ -841,7 +842,7 @@ lock_rec_has_to_wait(
 
 			return(FALSE);
 		}
-
+        /* 如果要加的锁不是插入意向锁，则不会和记录上的GAP锁冲突 */
 		if (!(type_mode & LOCK_INSERT_INTENTION)
 		    && lock_rec_get_gap(lock2)) {
 
@@ -850,7 +851,7 @@ lock_rec_has_to_wait(
 
 			return(FALSE);
 		}
-
+        /* 如果要插入的锁是GAP锁，则不会和记录上的NOT GAP锁冲突 */
 		if ((type_mode & LOCK_GAP)
 		    && lock_rec_get_rec_not_gap(lock2)) {
 
@@ -859,7 +860,7 @@ lock_rec_has_to_wait(
 
 			return(FALSE);
 		}
-
+        /* 无论要加的锁是什么，都不会和记录上的插入意向锁冲突 */
 		if (lock_rec_get_insert_intention(lock2)) {
 
 			/* No lock request needs to wait for an insert
@@ -1214,11 +1215,11 @@ lock_rec_other_has_conflicting(
 	ut_ad(lock_mutex_own());
 
 	bool	is_supremum = (heap_no == PAGE_HEAP_NO_SUPREMUM);
-
+    /* 对记录上的所有锁进行判断是否和当前要加的锁冲突 */
 	for (lock = lock_rec_get_first(lock_sys->rec_hash, block, heap_no);
 	     lock != NULL;
 	     lock = lock_rec_get_next_const(heap_no, lock)) {
-
+        /* 检测要加的锁和记录上已存在的锁是否冲突 */
 		if (lock_rec_has_to_wait(trx, mode, lock, is_supremum)) {
 			return(lock);
 		}
@@ -1261,7 +1262,7 @@ lock_sec_rec_some_has_impl(
 	for a page may be incorrect. */
 
 	if (max_trx_id < trx_rw_min_trx_id() && !recv_recovery_is_on()) {
-
+        /* 如果页的最大事务id < 最小活跃事务id，说明该事务已提交，不存在隐式锁 */
 		trx = 0;
 
 	} else if (!lock_check_trx_id_sanity(max_trx_id, rec, index, offsets)) {
@@ -1273,6 +1274,7 @@ lock_sec_rec_some_has_impl(
 	x-lock. We have to look in the clustered index. */
 
 	} else {
+        /* 当页的最大事务id不小于最小活跃事务id，不能判断是否事务以提交，需要回表查询是否有隐式锁 */
 		trx = row_vers_impl_x_locked(rec, index, offsets);
 	}
 
@@ -5922,6 +5924,7 @@ lock_rec_insert_check_and_lock(
 	lock_t*		lock;
 	ibool		inherit_in = *inherit;
 	trx_t*		trx = thr_get_trx(thr);
+    /* 定位到要插入的记录的下一条记录 */
 	const rec_t*	next_rec = page_rec_get_next_const(rec);
 	ulint		heap_no = page_rec_get_heap_no(next_rec);
 
@@ -5934,14 +5937,14 @@ lock_rec_insert_check_and_lock(
 	least IX-locked. When we are building an index, we would pass
 	BTR_NO_LOCKING_FLAG and skip the locking altogether. */
 	ut_ad(lock_table_has(trx, index->table, LOCK_IX));
-
+    /* 找到要插入记录的下一条记录上的第一个锁 */
 	lock = lock_rec_get_first(lock_sys->rec_hash, block, heap_no);
 
 	if (lock == NULL) {
 		/* We optimize CPU time usage in the simplest case */
 
 		lock_mutex_exit();
-
+        /* 如果不是主键索引（二级索引），更新页中的最大事务id字段 */
 		if (inherit_in && !dict_index_is_clust(index)) {
 			/* Update the page max trx id field */
 			page_update_max_trx_id(block,
@@ -5972,7 +5975,23 @@ lock_rec_insert_check_and_lock(
 	had to wait for their insert. Both had waiting gap type lock requests
 	on the successor, which produced an unnecessary deadlock. */
 
+    /* 插入意向锁，其实是特殊的GAP锁，即带有LOCK_INSERT_INTENTION标记的GAP锁 */
+
+    /* 检测要加的锁和记录上已存在的锁是否冲突
+       检查当前插入操作是否和记录上已存在的锁冲突，
+       就是检查插入意向锁(LOCK_X | LOCK_GAP | LOCK_INSERT_INTENTION)的锁和记录上锁的锁是否冲突
+       mode为插入意向锁 LOCK_X | LOCK_GAP | LOCK_INSERT_INTENTION
+       lock为要插入记录的下一条记录上的锁*/
+
+    /* 锁模式(type_mode)锁表示法
+     记录锁 LOCK_X(LOCK_S) | LOCK_REC_NO_GAP
+     间隙锁 LOCK_X(LOCK_S) | LOCK_GAP
+     临键锁 LOCK_X(LOCK_S) | LOCK_ORDINARY
+     插入意向锁 LOCK_X(LOCK_S) | LOCK_GAP | LOCK_INSERT_INTENTION */
+
 	const ulint	type_mode = LOCK_X | LOCK_GAP | LOCK_INSERT_INTENTION;
+
+    /* 如果要插入的记录的下一条记录上有锁，则判断插入是否和下一条记录上的锁冲突 */
 
 	const lock_t*	wait_for = lock_rec_other_has_conflicting(
 				type_mode, block, heap_no, trx);
@@ -6063,7 +6082,7 @@ lock_rec_convert_impl_to_expl_for_trx(
 		ulint	type_mode;
 
 		type_mode = (LOCK_REC | LOCK_X | LOCK_REC_NOT_GAP);
-
+        /* 为trx_id的事物加一个LOCK_X | NOT GAP记录锁 */
 		lock_rec_add_to_queue(
 			type_mode, block, heap_no, index, trx, FALSE);
 	}
@@ -6096,13 +6115,13 @@ lock_rec_convert_impl_to_expl(
 
 	if (dict_index_is_clust(index)) {
 		trx_id_t	trx_id;
-
+        /* 获取记录上的trx_id */
 		trx_id = lock_clust_rec_some_has_impl(rec, index, offsets);
-
+        /* 判断是上面的事务是否活跃 */
 		trx = trx_rw_is_active(trx_id, NULL, true);
 	} else {
 		ut_ad(!dict_index_is_online_ddl(index));
-
+        /* 判断二级索引上是否含有隐式锁 */
 		trx = lock_sec_rec_some_has_impl(rec, index, offsets);
 
 		ut_ad(!trx || !lock_rec_other_trx_holds_expl(
@@ -6117,7 +6136,7 @@ lock_rec_convert_impl_to_expl(
 		/* If the transaction is still active and has no
 		explicit x-lock set on the record, set one for it.
 		trx cannot be committed until the ref count is zero. */
-
+        /* 将隐式锁转换为显式锁，即为事务添加一个LOCK_X|NOT GAP锁 */
 		lock_rec_convert_impl_to_expl_for_trx(
 			block, rec, index, offsets, trx, heap_no);
 	}
@@ -6335,7 +6354,7 @@ lock_sec_rec_read_check_and_lock(
 	if ((page_get_max_trx_id(block->frame) >= trx_rw_min_trx_id()
 	     || recv_recovery_is_on())
 	    && !page_rec_is_supremum(rec)) {
-
+        /* 隐式锁转换，为持有隐式锁的事务设置一个LOCK_X | NOT GAP锁（此记录不一定有隐式锁，需要去函数里面判断） */
 		lock_rec_convert_impl_to_expl(block, rec, index, offsets);
 	}
 
@@ -6408,7 +6427,7 @@ lock_clust_rec_read_check_and_lock(
 	heap_no = page_rec_get_heap_no(rec);
 
 	if (heap_no != PAGE_HEAP_NO_SUPREMUM) {
-
+        /* 隐式锁转换，为持有隐式锁的事务设置一个LOCK_X | NOT GAP锁 */
 		lock_rec_convert_impl_to_expl(block, rec, index, offsets);
 	}
 
@@ -6418,7 +6437,7 @@ lock_clust_rec_read_check_and_lock(
 	      || lock_table_has(thr_get_trx(thr), index->table, LOCK_IX));
 	ut_ad(mode != LOCK_S
 	      || lock_table_has(thr_get_trx(thr), index->table, LOCK_IS));
-
+    /* 向主键索引插入时，为可能的重复主键的记录设置一个S|NOT GAP锁 */
 	err = lock_rec_lock(FALSE, mode | gap_mode, block, heap_no, index, thr);
 
 	MONITOR_INC(MONITOR_NUM_RECLOCK_REQ);
@@ -6967,11 +6986,14 @@ lock_trx_handle_wait(
 	trx_mutex_enter(trx);
 
 	if (trx->lock.was_chosen_as_deadlock_victim) {
+        //死锁
 		err = DB_DEADLOCK;
 	} else if (trx->lock.wait_lock != NULL) {
+        //如果此时还在等待锁，则释放该锁，返回等待
 		lock_cancel_waiting_and_release(trx->lock.wait_lock);
 		err = DB_LOCK_WAIT;
 	} else {
+        //如果此时之前等待的锁已经加锁成功了，返回加锁成功
 		/* The lock was probably granted before we got here. */
 		err = DB_SUCCESS;
 	}
