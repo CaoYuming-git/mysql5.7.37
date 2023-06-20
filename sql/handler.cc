@@ -3497,7 +3497,7 @@ int handler::update_auto_increment()
   assert(table_share->tmp_table != NO_TMP_TABLE ||
          m_lock_type != F_UNLCK);
   DBUG_ENTER("handler::update_auto_increment");
-
+   /*next_insert_id为下一个插入自增列的值*/
   /*
     next_insert_id is a "cursor" into the reserved interval, it may go greater
     than the interval, but not smaller.

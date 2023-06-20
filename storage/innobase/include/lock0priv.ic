@@ -317,7 +317,7 @@ lock_mode_compatible(
 {
 	ut_ad((ulint) mode1 < lock_types);
 	ut_ad((ulint) mode2 < lock_types);
-
+    /* 检测锁模式是否冲突 */
 	return(lock_compatibility_matrix[mode1][mode2]);
 }
 

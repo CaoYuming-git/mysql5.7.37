@@ -557,6 +557,8 @@ locks on the inserted record. */
  * statement-level MySQL binlog.
  * See also lock_mode_compatible().
  */
+
+/* 锁模式兼容性矩阵 */
 static const byte lock_compatibility_matrix[5][5] = {
  /**         IS     IX       S     X       AI */
  /* IS */ {  TRUE,  TRUE,  TRUE,  FALSE,  TRUE},

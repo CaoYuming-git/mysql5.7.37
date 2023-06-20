@@ -206,6 +206,7 @@ trx_undo_page_set_next_prev_and_add(
 	mach_write_to_2(ptr_to_first_free, end_of_rec);
 
 	/* Write this log entry to the UNDO log */
+    //写到undo log中去
 	trx_undof_page_add_undo_rec_log(undo_page, first_free,
 					end_of_rec, mtr);
 

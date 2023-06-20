@@ -1600,7 +1600,7 @@ row_ins_check_foreign_constraint(
 	ulint*		offsets		= offsets_;
 
 	bool		skip_gap_lock;
-
+    /* 如果ISO <= RC不加GAP锁 */
 	skip_gap_lock = (trx->isolation_level <= TRX_ISO_READ_COMMITTED);
 
 	DBUG_ENTER("row_ins_check_foreign_constraint");
@@ -1696,7 +1696,7 @@ row_ins_check_foreign_constraint(
 	if (check_table != table) {
 		/* We already have a LOCK_IX on table, but not necessarily
 		on check_table */
-
+        /* 在父表加上意向排他锁 */
 		err = lock_table(0, check_table, LOCK_IS, thr);
 
 		if (err != DB_SUCCESS) {
@@ -1748,9 +1748,9 @@ row_ins_check_foreign_constraint(
 				goto end_scan;
 			}
 		}
-
+        /* 比较外键和匹配的reference index上的记录是否相等 */
 		cmp = cmp_dtuple_rec(entry, rec, offsets);
-
+        /* 如果相等 */
 		if (cmp == 0) {
 
 			ulint	lock_type;
@@ -1758,7 +1758,7 @@ row_ins_check_foreign_constraint(
 			lock_type = skip_gap_lock
 				? LOCK_REC_NOT_GAP
 				: LOCK_ORDINARY;
-
+            /* 如果reference index上的记录有删除标记，根据ISO为这条记录加上共享NOT GAP或者ORDINARY锁 */
 			if (rec_get_deleted_flag(rec,
 						 rec_offs_comp(offsets))) {
 				err = row_ins_set_shared_rec_lock(
@@ -1775,7 +1775,7 @@ row_ins_check_foreign_constraint(
 				/* Found a matching record. Lock only
 				a record because we can allow inserts
 				into gaps */
-
+                /* 如果reference index上的记录正常，则为这条记录加上共享NOT GAP锁 */
 				err = row_ins_set_shared_rec_lock(
 					LOCK_REC_NOT_GAP, block,
 					rec, check_index, offsets, thr);
@@ -1951,13 +1951,13 @@ row_ins_check_foreign_constraints(
 
 	DEBUG_SYNC_C_IF_THD(thr_get_trx(thr)->mysql_thd,
 			    "foreign_constraint_check_for_ins");
-
+    /* 遍历所有外键 */
 	for (dict_foreign_set::iterator it = table->foreign_set.begin();
 	     it != table->foreign_set.end();
 	     ++it) {
 
 		foreign = *it;
-
+        /*只有当插入记录所在的索引树本身就是外键时，才会对这个外键进行真正的外键约束检查*/
 		if (foreign->foreign_index == index) {
 			dict_table_t*	ref_table = NULL;
 			dict_table_t*   foreign_table = foreign->foreign_table;
@@ -1986,7 +1986,7 @@ row_ins_check_foreign_constraints(
 			we will release dict_operation_lock temporarily!
 			But the counter on the table protects the referenced
 			table from being dropped while the check is running. */
-
+            /*检查一个外键*/
 			err = row_ins_check_foreign_constraint(
 				TRUE, foreign, table, entry, thr);
 
@@ -2033,13 +2033,13 @@ row_ins_dupl_error_with_rec(
 	ulint	i;
 
 	ut_ad(rec_offs_validate(rec, index, offsets));
-
+    //唯一索引的包含的字段数
 	n_unique = dict_index_get_n_unique(index);
 
 	matched_fields = 0;
 
 	cmp_dtuple_rec_with_match(entry, rec, offsets, &matched_fields);
-
+    /* 如果匹配的字段数 < 索引的字段数，则说明不同 */
 	if (matched_fields < n_unique) {
 
 		return(FALSE);
@@ -2047,7 +2047,7 @@ row_ins_dupl_error_with_rec(
 
 	/* In a unique secondary index we allow equal key values if they
 	contain SQL NULLs */
-
+    /* 如果是二级索引，则判断要插入的记录中是否有null值，如果有null值也不冲突，因为唯一索引中允许多个null值行 */
 	if (!dict_index_is_clust(index) && !index->nulls_equal) {
 
 		for (i = 0; i < n_unique; i++) {
@@ -2057,7 +2057,7 @@ row_ins_dupl_error_with_rec(
 			}
 		}
 	}
-
+    /* 判断是否是删除的记录，如果是删除的记录则不会冲突 */
 	return(!rec_get_deleted_flag(rec, rec_offs_comp(offsets)));
 }
 
@@ -2123,10 +2123,11 @@ row_ins_scan_sec_index_for_duplicate(
 	allow_duplicates = thr_get_trx(thr)->duplicates;
 
 	/* Scan index records and check if there is a duplicate */
-
+    /* 先向键值相同的记录加锁，再判断是否冲突。因为键值相同的记录不一定一定冲突，因为可能是删除的记录(加了删除标记，但是因为MVCC多版本的原因，还未被清理，所以可以被查询到)*/
 	do {
 		const rec_t*		rec	= btr_pcur_get_rec(&pcur);
 		const buf_block_t*	block	= btr_pcur_get_block(&pcur);
+        /* 二级索引使用ordinary锁 */
 		const ulint		lock_type = LOCK_ORDINARY;
 
 		if (page_rec_is_infimum(rec)) {
@@ -2146,11 +2147,11 @@ row_ins_scan_sec_index_for_duplicate(
 			duplicate key we will take X-lock for
 			duplicates ( REPLACE, LOAD DATAFILE REPLACE,
 			INSERT ON DUPLICATE KEY UPDATE). */
-
+            /* 如果是 insert on duplicate key update，即如果存在相同索引值时更新这条记录时，设置排他LOCK_ORDINARY锁，因为要执行更新这条重复记录的操作,在5.7.21中加锁的类型也是ORDINARY锁 */
 			err = row_ins_set_exclusive_rec_lock(
 				lock_type, block, rec, index, offsets, thr);
 		} else {
-
+            /* 如果不是 insert on duplicate key update，即设置共享LOCK_ORDINARY锁，因为不需要执行更新这条重复记录的操作,在5.7.21中加锁的类型也是ORDINARY锁  */
 			err = row_ins_set_shared_rec_lock(
 				lock_type, block, rec, index, offsets, thr);
 		}
@@ -2172,6 +2173,7 @@ row_ins_scan_sec_index_for_duplicate(
 		cmp = cmp_dtuple_rec(entry, rec, offsets);
 
 		if (cmp == 0 && !index->allow_duplicates) {
+            /* 加锁后进行冲突判断 */
 			if (row_ins_dupl_error_with_rec(rec, entry,
 							index, offsets)) {
 				err = DB_DUPLICATE_KEY;
@@ -2329,9 +2331,9 @@ row_ins_duplicate_error_in_clust(
 	that a duplicate key violation may occur, this may not be the case. */
 
 	n_unique = dict_index_get_n_unique(cursor->index);
-
+    /* 先向键值相同的记录加锁，再判断是否冲突。因为键值相同的记录不一定一定冲突，因为可能是删除的记录(加了删除标记，但是因为MVCC多版本的原因，还未被清理，所以可以被查询到) */
 	if (cursor->low_match >= n_unique) {
-
+        /* 主键冲突的这条记录 */
 		rec = btr_cur_get_rec(cursor);
 
 		if (!page_rec_is_infimum(rec)) {
@@ -2352,13 +2354,13 @@ row_ins_duplicate_error_in_clust(
 				duplicate key we will take X-lock for
 				duplicates ( REPLACE, LOAD DATAFILE REPLACE,
 				INSERT ON DUPLICATE KEY UPDATE). */
-
+                /* 如果是 insert on duplicate key update，即如果存在相同索引值时更新这条记录时，设置排他NOT GAP锁，因为要执行更新这条重复记录的操作,在5.7.21中加锁的类型则会根据ISO来使用NOT GAP或者 ORDINARY锁 */
 				err = row_ins_set_exclusive_rec_lock(
 					LOCK_REC_NOT_GAP,
 					btr_cur_get_block(cursor),
 					rec, cursor->index, offsets, thr);
 			} else {
-
+               /* 对于没有on DUPLICATE update情况时，为相同主键重复冲突的记录加共享NOT GAP锁，因为不用更新这条记录,在5.7.21中加锁的类型则会根据ISO来使用NOT GAP或者 ORDINARY锁 */
 				err = row_ins_set_shared_rec_lock(
 					LOCK_REC_NOT_GAP,
 					btr_cur_get_block(cursor), rec,
@@ -2372,7 +2374,7 @@ row_ins_duplicate_error_in_clust(
 			default:
 				goto func_exit;
 			}
-
+            /* 检查记录插入是否会有主键重复冲突 */
 			if (row_ins_dupl_error_with_rec(
 				    rec, entry, cursor->index, offsets)) {
 duplicate:
@@ -2585,7 +2587,7 @@ row_ins_clust_index_entry_low(
 		} else {
 			/* Note that the following may return also
 			DB_LOCK_WAIT */
-
+            /* 校验是否有主键冲突 */
 			err = row_ins_duplicate_error_in_clust(
 				flags, cursor, entry, thr, &mtr);
 		}
@@ -2636,6 +2638,7 @@ err_exit:
 		if (mode != BTR_MODIFY_TREE) {
 			ut_ad((mode & ~BTR_ALREADY_S_LATCHED)
 			      == BTR_MODIFY_LEAF);
+            //乐观插入
 			err = btr_cur_optimistic_insert(
 				flags, cursor, &offsets, &offsets_heap,
 				entry, &insert_rec, &big_rec,
@@ -2648,7 +2651,7 @@ err_exit:
 			}
 
 			DEBUG_SYNC_C("before_insert_pessimitic_row_ins_clust");
-
+            //乐观插入
 			err = btr_cur_optimistic_insert(
 				flags, cursor,
 				&offsets, &offsets_heap,
@@ -2656,6 +2659,7 @@ err_exit:
 				n_ext, thr, &mtr);
 
 			if (err == DB_FAIL) {
+                //悲观插入
 				err = btr_cur_pessimistic_insert(
 					flags, cursor,
 					&offsets, &offsets_heap,
@@ -3052,7 +3056,7 @@ row_ins_sec_index_entry_low(
 #endif /* UNIV_DEBUG */
 
 	n_unique = dict_index_get_n_unique(index);
-
+    //唯一索引需要检查唯一性冲突
 	if (dict_index_is_unique(index)
 	    && (cursor.low_match >= n_unique || cursor.up_match >= n_unique)) {
 		mtr_commit(&mtr);
@@ -3063,7 +3067,7 @@ row_ins_sec_index_entry_low(
 			    &mtr, index, check, search_mode)) {
 			goto func_exit;
 		}
-
+        //唯一性检测，即索引值冲突
 		err = row_ins_scan_sec_index_for_duplicate(
 			flags, index, entry, thr, check, &mtr, offsets_heap);
 
@@ -3156,6 +3160,7 @@ row_ins_sec_index_entry_low(
 		big_rec_t*	big_rec;
 
 		if (mode == BTR_MODIFY_LEAF) {
+            /* 乐观插入 */
 			err = btr_cur_optimistic_insert(
 				flags, &cursor, &offsets, &offsets_heap,
 				entry, &insert_rec,
@@ -3172,13 +3177,14 @@ row_ins_sec_index_entry_low(
 				err = DB_LOCK_TABLE_FULL;
 				goto func_exit;
 			}
-
+            /* 先进行乐观插入 */
 			err = btr_cur_optimistic_insert(
 				flags, &cursor,
 				&offsets, &offsets_heap,
 				entry, &insert_rec,
 				&big_rec, 0, thr, &mtr);
 			if (err == DB_FAIL) {
+                /* 如果乐观插入失败进行悲观插入 */
 				err = btr_cur_pessimistic_insert(
 					flags, &cursor,
 					&offsets, &offsets_heap,
@@ -3288,7 +3294,7 @@ row_ins_clust_index_entry(
 	ulint	n_uniq;
 
 	DBUG_ENTER("row_ins_clust_index_entry");
-
+    //检查外键约束，如果有约束，还需要加锁
 	if (!index->table->foreign_set.empty()) {
 		err = row_ins_check_foreign_constraints(
 			index->table, index, entry, thr);
@@ -3323,6 +3329,7 @@ row_ins_clust_index_entry(
 		err = row_ins_sorted_clust_index_entry(
 			BTR_MODIFY_LEAF, index, entry, n_ext, thr);
 	} else {
+        //乐观插入（只修改叶节点） 由参数mode=BTR_MODIFY_LEAF确定 http://mysql.taobao.org/monthly/2020/06/02/
 		err = row_ins_clust_index_entry_low(
 			flags, BTR_MODIFY_LEAF, index, n_uniq, entry,
 			n_ext, thr, dup_chk_only);
@@ -3352,6 +3359,7 @@ row_ins_clust_index_entry(
 		err = row_ins_sorted_clust_index_entry(
 			BTR_MODIFY_TREE, index, entry, n_ext, thr);
 	} else {
+        //悲观插入（修改整个索引树） 由参数mode=BTR_MODIFY_TREE确定 http://mysql.taobao.org/monthly/2020/06/02/
 		err = row_ins_clust_index_entry_low(
 			flags, BTR_MODIFY_TREE, index, n_uniq, entry,
 			n_ext, thr, dup_chk_only);
@@ -3411,7 +3419,7 @@ row_ins_sec_index_entry(
 	} else {
 		flags = BTR_NO_LOCKING_FLAG | BTR_NO_UNDO_LOG_FLAG;
 	}
-
+    //二级索引记录乐观插入
 	err = row_ins_sec_index_entry_low(
 		flags, BTR_MODIFY_LEAF, index, offsets_heap, heap, entry,
 		0, thr, dup_chk_only);
@@ -3428,7 +3436,7 @@ row_ins_sec_index_entry(
 		} else {
 			index->last_sel_cur->invalid = true;
 		}
-
+        //二级索引记录悲观插入
 		err = row_ins_sec_index_entry_low(
 			flags, BTR_MODIFY_TREE, index,
 			offsets_heap, heap, entry, 0, thr,
@@ -3459,7 +3467,7 @@ row_ins_index_entry(
 	DBUG_EXECUTE_IF("row_ins_index_entry_timeout", {
 			DBUG_SET("-d,row_ins_index_entry_timeout");
 			return(DB_LOCK_WAIT);});
-
+    /* 主键索引和二级索引插入，先尝试乐观（只修改叶子节点）插入，后尝试悲观（修改整个索引树）插入 http://mysql.taobao.org/monthly/2020/06/02/ */
 	if (dict_index_is_clust(index)) {
 		return(row_ins_clust_index_entry(index, entry, thr, 0, false));
 	} else {
@@ -3610,7 +3618,7 @@ row_ins_index_entry_step(
 	}
 
 	ut_ad(dtuple_check_typed(node->entry));
-
+    /* 向索引插入记录 */
 	err = row_ins_index_entry(node->index, node->entry, thr);
 
 	DEBUG_SYNC_C_IF_THD(thr_get_trx(thr)->mysql_thd,
@@ -3723,14 +3731,15 @@ row_ins(
 	dberr_t	err;
 
 	DBUG_ENTER("row_ins");
-
+    DBUG_PRINT("jojojo", ("xxxxxxxxxxxxxxxxxxxxxxxxxxxx....."));
 	DBUG_PRINT("row_ins", ("table: %s", node->table->name.m_name));
 
 	if (node->state == INS_NODE_ALLOC_ROW_ID) {
-
+        /* 如果没有主键，为要插入的记录生成隐藏字段row_id */
 		row_ins_alloc_row_id_step(node);
-
+        /* 获取第一条索引，即主键索引 */
 		node->index = dict_table_get_first_index(node->table);
+        /* 对于要插入的一条记录，对应于每个索引都有一条要插入的记录，entry_list中存放的就是每个索引要插入的记录组成的链表，获取记录链表中的第一个节点，即主键索引要插入的记录 */
 		node->entry = UT_LIST_GET_FIRST(node->entry_list);
 
 		if (node->ins_type == INS_SEARCHED) {
@@ -3746,9 +3755,10 @@ row_ins(
 	}
 
 	ut_ad(node->state == INS_NODE_INSERT_ENTRIES);
-
+    /* 循环插入记录到所有的索引中去(先从主键索引开始插入) */
 	while (node->index != NULL) {
 		if (node->index->type != DICT_FTS) {
+            //插入记录到对应的索引中去
 			err = row_ins_index_entry_step(node, thr);
 			switch(err) {
 			case DB_SUCCESS:
@@ -3763,8 +3773,9 @@ row_ins(
 				DBUG_RETURN(err);
 			}
 		}
-
+        /*获取下一个索引*/
 		node->index = dict_table_get_next_index(node->index);
+        /*获取下一个索引要插入的记录*/
 		node->entry = UT_LIST_GET_NEXT(tuple_list, node->entry);
 
 		DBUG_EXECUTE_IF(

@@ -709,7 +709,7 @@ cmp_dtuple_rec_with_match_low(
 	}
 
 	/* Match fields in a loop */
-
+    //比较每个需要比较的字段
 	for (; cur_field < n_cmp; cur_field++) {
 		const byte*	rec_b_ptr;
 		const dfield_t*	dtuple_field
@@ -733,7 +733,7 @@ cmp_dtuple_rec_with_match_low(
 					      &rec_f_len);
 
 		ut_ad(!dfield_is_ext(dtuple_field));
-
+       //比较单个字段
 		ret = cmp_data(type->mtype, type->prtype,
 			       dtuple_b_ptr, dtuple_f_len,
 			       rec_b_ptr, rec_f_len);

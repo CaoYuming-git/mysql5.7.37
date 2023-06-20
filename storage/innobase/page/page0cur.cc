@@ -1535,6 +1535,7 @@ use_heap:
 
 	/* 9. Write log record of the insert */
 	if (UNIV_LIKELY(mtr != NULL)) {
+        /* 写redo log */
 		page_cur_insert_rec_write_log(insert_rec, rec_size,
 					      current_rec, index, mtr);
 	}

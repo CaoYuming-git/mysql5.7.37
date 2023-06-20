@@ -2949,6 +2949,8 @@ btr_cur_ins_lock_and_undo(
 	ut_ad(mtr->is_named_space(index->space));
 
 	/* Check if there is predicate or GAP lock preventing the insertion */
+
+    // 检查是否有GAP/RDINARY锁阻止插入
 	if (!(flags & BTR_NO_LOCKING_FLAG)) {
 		if (dict_index_is_spatial(index)) {
 			lock_prdt_t	prdt;
@@ -2967,18 +2969,19 @@ btr_cur_ins_lock_and_undo(
 				index, thr, mtr, &prdt);
 			*inherit = false;
 		} else {
+            /* 检查插入操作时是否和下一条记录上的锁是否冲突，就是检查是否有GAP/ORDINARY锁阻止当前插入操作 */
 			err = lock_rec_insert_check_and_lock(
 				flags, rec, btr_cur_get_block(cursor),
 				index, thr, mtr, inherit);
 		}
 	}
-
+    /* 二级索引插入时不会执行后面的undo log和更新trx_id和roll_ptr操作 */
 	if (err != DB_SUCCESS
 	    || !dict_index_is_clust(index) || dict_index_is_ibuf(index)) {
 
 		return(err);
 	}
-
+    /* 写undo log */
 	err = trx_undo_report_row_operation(flags, TRX_UNDO_INSERT_OP,
 					    thr, index, entry,
 					    NULL, 0, NULL, NULL,
@@ -2993,7 +2996,7 @@ btr_cur_ins_lock_and_undo(
 
 	if (!(flags & BTR_KEEP_SYS_FLAG)
 	    && !dict_table_is_intrinsic(index->table)) {
-
+        /* 更新记录上的trx_id和roll_ptr字段 */
 		row_upd_index_entry_sys_field(entry, index,
 					      DATA_ROLL_PTR, roll_ptr);
 	}
@@ -3195,7 +3198,7 @@ fail_err:
 			btr_page_reorganize(page_cursor, index, mtr););
 
 	/* Now, try the insert */
-	{
+	{//插入操作
 		const rec_t*	page_cursor_rec = page_cur_get_rec(page_cursor);
 
 		if (dict_table_is_intrinsic(index->table)) {
@@ -3207,13 +3210,15 @@ fail_err:
 		} else {
 			/* Check locks and write to the undo log,
 			if specified */
+
+            // 检查锁和写undo log
 			err = btr_cur_ins_lock_and_undo(flags, cursor, entry,
 							thr, mtr, &inherit);
 
 			if (err != DB_SUCCESS) {
 				goto fail_err;
 			}
-
+            //真正的插入操作
 			*rec = page_cur_tuple_insert(
 				page_cursor, entry, index, offsets, heap,
 				n_ext, mtr);

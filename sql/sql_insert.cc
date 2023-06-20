@@ -620,6 +620,7 @@ bool Sql_cmd_insert::mysql_insert(THD *thd,TABLE_LIST *table_list)
   }
 
   // Lock the tables now if not locked already.
+  /* 锁表 */
   if (!is_locked &&
       lock_tables(thd, table_list, lex->table_count, 0))
     DBUG_RETURN(true);

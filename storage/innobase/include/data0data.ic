@@ -485,8 +485,10 @@ dtuple_create_from_mem(
 	tuple->n_fields = n_fields;
 	tuple->n_v_fields = n_v_fields;
 	tuple->n_fields_cmp = n_fields;
+	/* 就是tuple指向的地址+sizeof(tuple结构体)的位置，也就是tuple结构体末尾的位置+1，tuple[1]<=等同于=>*(tuple+1)，所以&tuple[1]<==>tuple+sizeof(tuple) */
 	tuple->fields = (dfield_t*) &tuple[1];
 	if (n_v_fields > 0) {
+		/* 就是指向tuple->fields地址+n_fields*sizeof(dfield_t)的地址，就是fields末尾就是v_fields，注意tuple->fields指向的是n_fields个字段的头地址，不是只代表一个dfield_t结构 */
 		tuple->v_fields = &tuple->fields[n_fields];
 	} else {
 		tuple->v_fields = NULL;

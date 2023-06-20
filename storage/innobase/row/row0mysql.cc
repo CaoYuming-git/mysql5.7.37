@@ -1722,7 +1722,7 @@ row_insert_for_mysql_using_ins_graph(
 
 	row_get_prebuilt_insert_row(prebuilt);
 	node = prebuilt->ins_node;
-
+    //将server层的行数据，转换为innodb需要的行格式
 	row_mysql_convert_row_to_innobase(node->row, prebuilt, mysql_rec,
 					  &blob_heap);
 
@@ -1742,7 +1742,7 @@ row_insert_for_mysql_using_ins_graph(
 run_again:
 	thr->run_node = node;
 	thr->prev_node = node;
-
+    /* 这一步进行插入操作 */
 	row_ins_step(thr);
 
 	DEBUG_SYNC_C("ib_after_row_insert_step");

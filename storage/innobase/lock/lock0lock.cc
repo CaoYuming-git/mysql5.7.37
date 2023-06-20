@@ -6354,7 +6354,7 @@ lock_sec_rec_read_check_and_lock(
 	if ((page_get_max_trx_id(block->frame) >= trx_rw_min_trx_id()
 	     || recv_recovery_is_on())
 	    && !page_rec_is_supremum(rec)) {
-        /* 隐式锁转换，为持有隐式锁的事务设置一个LOCK_X | NOT GAP锁（此记录不一定有隐式锁，需要去函数里面判断） */
+        /* 隐式锁转换，为持有隐式锁的事务设置一个LOCK_X | NOT GAP锁 */
 		lock_rec_convert_impl_to_expl(block, rec, index, offsets);
 	}
 

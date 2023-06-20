@@ -284,6 +284,7 @@ page_cur_tuple_insert(
 		rec = page_cur_insert_rec_zip(
 			cursor, index, rec, *offsets, mtr);
 	} else {
+        /* 插入记录到页中去 */
 		rec = page_cur_insert_rec_low(cursor->rec,
 					      index, rec, *offsets, mtr);
 	}
