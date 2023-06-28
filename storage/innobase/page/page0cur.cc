@@ -459,6 +459,9 @@ page_cur_search_with_match(
 	ut_d(page_check_dir(page));
 
 #ifdef PAGE_CUR_ADAPT
+    /*InnoDB针对按照主键顺序插入的场景做了一个小小的优化。因为如果按照主键顺序插入的话，能保证每次都插入在这个数据页的最后，所以只需要直接把位置直接定位在数据页的最后
+     *http://mysql.taobao.org/monthly/2018/04/03/
+     * */
 	if (page_is_leaf(page)
 	    && (mode == PAGE_CUR_LE)
 	    && !dict_index_is_spatial(index)
@@ -507,20 +510,20 @@ page_cur_search_with_match(
 	the input parameter, and X denotes an arbitrary physical record on
 	the page. We want to position the cursor on the first X which
 	satisfies the condition. */
-
+    //初始值为0
 	up_matched_fields  = *iup_matched_fields;
 	low_matched_fields = *ilow_matched_fields;
 
 	/* Perform binary search. First the search is done through the page
 	directory, after that as a linear search in the list of records
 	owned by the upper limit directory slot. */
-
-	low = 0;
-	up = page_dir_get_n_slots(page) - 1;
+    /*先去header directory中使用二分法，找到对应的上限槽(小)和下限槽(大)*/
+	low = 0;//最小槽
+	up = page_dir_get_n_slots(page) - 1;//最大槽
 
 	/* Perform binary search until the lower and upper limit directory
 	slots come to the distance 1 of each other */
-
+    /*执行二分法直到上限槽和下限槽距离<=1，即相邻或相同*/
 	while (up - low > 1) {
 		mid = (low + up) / 2;
 		slot = page_dir_get_nth_slot(page, mid);
@@ -541,16 +544,16 @@ page_cur_search_with_match(
 				dtuple_get_n_fields_cmp(tuple), &heap);
 
 		}
-
+        /*mid_rec和查询元组比较*/
 		cmp = cmp_dtuple_rec_with_match(
 			tuple, mid_rec, offsets, &cur_matched_fields);
-
+        //cmp > 0,mid_rec<tuple，则low=mid
 		if (cmp > 0) {
 low_slot_match:
 			low = mid;
-			low_matched_fields = cur_matched_fields;
+			low_matched_fields = cur_matched_fields;//匹配的字段数
 
-		} else if (cmp) {
+		} else if (cmp) {//cmp < 0,mid_rec>tuple，则up=mid
 #ifdef PAGE_CUR_LE_OR_EXTENDS
 			if (mode == PAGE_CUR_LE_OR_EXTENDS
 			    && page_cur_rec_field_extends(
@@ -564,13 +567,13 @@ up_slot_match:
 			up = mid;
 			up_matched_fields = cur_matched_fields;
 
-		} else if (mode == PAGE_CUR_G || mode == PAGE_CUR_LE
+		} else if (mode == PAGE_CUR_G || mode == PAGE_CUR_LE //cmp = 0
 #ifdef PAGE_CUR_LE_OR_EXTENDS
 			   || mode == PAGE_CUR_LE_OR_EXTENDS
 #endif /* PAGE_CUR_LE_OR_EXTENDS */
-			   ) {
+			   ) {//如果cmp=0 && ('>模式'||'<=模式'),low=mid
 			goto low_slot_match;
-		} else {
+		} else {//如果cmp=0 && ('>=模式'||'<模式'),up=mid
 
 			goto up_slot_match;
 		}
@@ -583,7 +586,40 @@ up_slot_match:
 
 	/* Perform linear search until the upper and lower records come to
 	distance 1 of each other. */
-
+    /*线性查找直到low_rec和up_rec相邻
+     * up_match和low_match对应low_rec和up_rec与tuple匹配的字段数
+     *
+     * low_rec和up_rec最后的位置：
+     *  如果没有匹配到tuple(不存在和查询条件匹配的记录)：
+     *      low_rec < tuple < up_rec(low_rec和up_rec相邻)
+     *  如果匹配到tuple(存在和查询条件匹配的记录)：
+     *      mode为>，low_rec(=tuple)<up_rec，low_rec(=tuple)表示low_rec就是匹配到的tuple记录，以下类推
+     *      mode为>=，low_up<up_rec(=tuple)
+     *      mode为<，low_up<up_rec(=tuple)
+     *      mode为<=，low_up(=tuple)<up_rec
+     *
+     * cursor最后定位的位置：
+     *  如果mode为(>,>=)，cursor定位到up_rec
+     *  如果mode为(<,<=)，cursor定位到low_rec
+     *
+     * 最后low_rec、up_rec、tuple、cursor的位置关系为：
+     *  如果没有匹配到tuple(不存在和查询条件匹配的记录)：
+     *   mode为>或>=： low_rec < tuple < up_rec(cursor)
+     *   mode为<或<=： low_rec(cursor) < tuple < up_rec
+     *  如果匹配到tuple(存在和查询条件匹配的记录)：
+     *   mode为>，low_rec(=tuple) < up_rec(cursor)
+     *   mode为>=，low_up < up_rec(=tuple)(cursor)
+     *   mode为<，low_up(cursor) < up_rec(=tuple)
+     *   mode为<=，low_up(=tuple)(cursor) < up_rec
+     *
+     * 总结：
+     *  如果mode是(>,>=)：cursor总是在up_rec上
+     *      对于mode是>：要满足cursor在up_rec上是正确的，则意味着low_rec必须是tuple匹配到的值，或者没有tuple的记录存在
+     *      对于mode是>=：要满足cursor在up_rec上是正确的，则意味着up_rec必须是tuple匹配到的值，或者没有tuple的记录存在
+     *  如果mode是(<,<=)：cursor总是在low_rec上
+     *      对于mode是<：要满足cursor在low_rec上是正确的，则意味着up_rec必须是tuple匹配到的值，或者没有tuple的记录存在
+     *      对于mode是<=：要满足cursor在low_rec上是正确的，则意味着low_rec必须是tuple匹配到的值，或者没有tuple的记录存在
+     * */
 	while (page_rec_get_next_const(low_rec) != up_rec) {
 
 		mid_rec = page_rec_get_next_const(low_rec);
