@@ -971,10 +971,11 @@ ULINT_UNDEFINED if not contained */
 ulint
 dict_index_get_nth_col_or_prefix_pos(
 	const dict_index_t*	index,
-	ulint			n,
+	ulint			n,//在表中的第几个字段
 	bool			inc_prefix,
 	bool			is_virtual)
 {
+    /*目的时找出表中第n个字段在某个索引index中的位置，如果在索引中找不到这个字段则返回-1*/
 	const dict_field_t*	field;
 	const dict_col_t*	col;
 	ulint			pos;
@@ -986,6 +987,7 @@ dict_index_get_nth_col_or_prefix_pos(
 	if (is_virtual) {
 		col = &(dict_table_get_nth_v_col(index->table, n)->m_col);
 	} else {
+        //找出表中第n个字段的信息
 		col = dict_table_get_nth_col(index->table, n);
 	}
 
@@ -993,19 +995,19 @@ dict_index_get_nth_col_or_prefix_pos(
 
 		return(dict_col_get_clust_pos(col, index));
 	}
-
+    /*索引中的字段数*/
 	n_fields = dict_index_get_n_fields(index);
 
 	for (pos = 0; pos < n_fields; pos++) {
 		field = dict_index_get_nth_field(index, pos);
-
+        //在索引中找到了对应的字段，返回在索引中的位置
 		if (col == field->col
 		    && (inc_prefix || field->prefix_len == 0)) {
 
 			return(pos);
 		}
 	}
-
+    //在索引中没有找到对应的字段，返回-1
 	return(ULINT_UNDEFINED);
 }
 

@@ -5953,12 +5953,10 @@ locks_ok:
 
 	/* Get the clustered index record if needed, if we did not do the
 	search using the clustered index. */
-    /*如果查询的是二级索引且查询的字段中有不在二级索引中的，则需要回表
-     * need_to_access_clustered：if we are fetching
-	 *				columns through a secondary index
-	 *				and at least one column is not in
-	 *				the secondary index, then this is
-	 *				set to TRUE
+    /* 判断是否需要回表查询：当索引是二级索引 && 查询聚集索引标记为TRUE时，进行回表操作
+     * need_to_access_clustered：表示是否需要查询聚集索引
+     *  如果时加锁操作(LOCK_X)则必须回表，值为TRUE。ha_innobase::build_template()中设置该值
+     *  如果查询的时二级索引且查询的字段有不在二级索引中的，需要回表。在build_template()->build_template_field()中设置该值
      * */
 	if (index != clust_index && prebuilt->need_to_access_clustered) {
 /*

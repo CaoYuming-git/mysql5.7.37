@@ -6985,7 +6985,9 @@ build_template_field(
 	templ->mbminlen = dict_col_get_mbminlen(col);
 	templ->mbmaxlen = dict_col_get_mbmaxlen(col);
 	templ->is_unsigned = col->prtype & DATA_UNSIGNED;
-
+    /*当前查询的是二级索引 && 要查询的字段不在当前的二级索引中
+     *所以要回表，把need_to_access_clustered置为TRUE
+     * */
 	if (!dict_index_is_clust(index)
 	    && templ->rec_field_no == ULINT_UNDEFINED) {
 		prebuilt->need_to_access_clustered = TRUE;
@@ -7036,7 +7038,7 @@ ha_innobase::build_template(
 		/* We always retrieve the whole clustered index record if we
 		use exclusive row level locks, for example, if the read is
 		done in an UPDATE statement. */
-
+        /*如果我们使用排他行锁，则必须读取聚集索引，比如update语句在查询时*/
 		whole_row = true;
 	} else if (!whole_row) {
 		if (m_prebuilt->hint_need_to_fetch_extra_cols
@@ -7073,7 +7075,7 @@ ha_innobase::build_template(
 	clust_index = dict_table_get_first_index(m_prebuilt->table);
 
 	index = whole_row ? clust_index : m_prebuilt->index;
-
+    //判断查询时是否需要回表标记
 	m_prebuilt->need_to_access_clustered = (index == clust_index);
 
 	/* Either m_prebuilt->index should be a secondary index, or it
@@ -7160,7 +7162,7 @@ ha_innobase::build_template(
 						continue;
 					}
 				}
-
+                /*构建m_prebuilt中字段相关参数，同时如果查询字段不在索引中时会设置回表参数need_to_access_clustered*/
 				templ = build_template_field(
 					m_prebuilt, clust_index, index,
 					table, field, i - num_v, 0);
@@ -9062,7 +9064,7 @@ ha_innobase::change_active_index(
 	and then calculates the sum. Previously we played safe and used
 	the flag ROW_MYSQL_WHOLE_ROW below, but that caused unnecessary
 	copying. Starting from MySQL-4.1 we use a more efficient flag here. */
-
+    //构建m_prebuilt
 	build_template(false);
 
 	DBUG_RETURN(0);
