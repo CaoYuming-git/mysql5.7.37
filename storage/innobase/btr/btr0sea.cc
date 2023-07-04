@@ -1013,7 +1013,7 @@ btr_search_guess_on_hash(
 
 	ut_ad(rw_lock_get_writer(btr_get_search_latch(index)) != RW_LOCK_X);
 	ut_ad(rw_lock_get_reader_count(btr_get_search_latch(index)) > 0);
-
+    //根据查询条件在AHI中定位到对应的节点(此哈系表节点包含了记录所在的页在buffer pool的block，以及在block中的位置)的记录指针(记录在block中的位置)
 	rec = (rec_t*) ha_search_and_get_data(
 			btr_get_search_table(index), fold);
 
@@ -1027,7 +1027,7 @@ btr_search_guess_on_hash(
 
 		return(FALSE);
 	}
-
+    //获取记录对应的buffer pool的block
 	buf_block_t*	block = buf_block_from_ahi(rec);
 
 	if (!has_search_latch) {
@@ -1065,7 +1065,7 @@ btr_search_guess_on_hash(
 	}
 
 	ut_ad(page_rec_is_user_rec(rec));
-
+    //将游标挪到记录所在位置(即更新block和rec指针)
 	btr_cur_position(index, (rec_t*) rec, block, cursor);
 
 	/* Check the validity of the guess within the page */
