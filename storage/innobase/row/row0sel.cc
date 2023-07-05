@@ -3957,7 +3957,7 @@ row_sel_dequeue_cached_row_for_mysql(
 
 	prebuilt->n_fetch_cached--;
 	prebuilt->fetch_cache_first++;
-
+    /*如果缓存队列空了，也会把记录指针置为0*/
 	if (prebuilt->n_fetch_cached == 0) {
 		prebuilt->fetch_cache_first = 0;
 	}
@@ -4802,7 +4802,7 @@ row_search_mvcc(
 
 	/*-------------------------------------------------------------*/
 	/* PHASE 1: Try to pop the row from the prefetch cache */
-    /*尝试从预取缓存中获取记录*/
+    /*非首次查询尝试从预取缓存中获取记录*/
 	if (UNIV_UNLIKELY(direction == 0)) {
 		/*如果是首次查询，缓存中肯定没有数据，将缓存相关参数置空*/
         trx->op_info = "starting index read";
@@ -4854,7 +4854,7 @@ row_search_mvcc(
 			err = DB_RECORD_NOT_FOUND;
 			goto func_exit;
 		}
-
+        //这种情况应该不会出现，因为在row_sel_dequeue_cached_row_for_mysql中作了处理，如果缓存队列中没有记录了会把fetch_cache_first置为0
 		if (prebuilt->fetch_cache_first > 0
 		    && prebuilt->fetch_cache_first < MYSQL_FETCH_CACHE_SIZE) {
             /*如果缓存中的记录数<=0 && 缓存中指向待取出记录的下标 < 缓存的记录数
@@ -4885,8 +4885,9 @@ row_search_mvcc(
 	delete-marked versions of a record where only the primary key
 	values differ: thus in a secondary index we must use next-key
 	locks when locking delete-marked records. */
-    /*如果是唯一性查询
-     *需要满足 精确匹配 && 索引是唯一索引 && 所有索引列用上 && (主键索引 || 搜索条件不是NULL)
+    /*判断是否是唯一性查询，如果是，则打上唯一性查询标记，且如果当前记录不是首次查询，则可直接结束查询(也可说是对唯一性查询的一种优化)
+     * 唯一性查询也是精确匹配，但是由于此处有结束查询的判断，所以对于唯一性查询，它的第一条不匹配记录即使在ISO>=RR时也不会加上GAP锁(唯一性查询的优化)
+     * 需要满足 精确匹配 && 索引是唯一索引 && 所有索引列用上 && (主键索引 || 搜索条件不是NULL)
      * */
 	if (match_mode == ROW_SEL_EXACT
 	    && dict_index_is_unique(index)
@@ -4907,7 +4908,7 @@ row_search_mvcc(
 		retrieve also a second row if a primary key contains more than
 		1 column. Return immediately if this is not a HANDLER
 		command. */
-        /*如果direction!=0，表示非首次查询，首次查询时已经查询到了一条记录，说明现在已经没有其他记录了，直接返回DB_RECORD_NOT_FOUND*/
+        /*唯一性查询优化，如果direction!=0，表示非首次查询，首次查询时已经查询到了一条记录，说明现在已经没有其他记录了，直接返回DB_RECORD_NOT_FOUND，不需要后续步骤了*/
 		if (UNIV_UNLIKELY(direction != 0
 				  && !prebuilt->used_in_HANDLER)) {
 
@@ -4934,12 +4935,12 @@ row_search_mvcc(
 	search system latch when we retrieve an externally stored field, we
 	cannot use the adaptive hash index in a search in the case the row
 	may be long and there may be externally stored fields */
-    /* 首次查询时，判断是否利用快速AHI(自适应哈希索引，可以减少寻路到节点的开销，根据查询条件一次定位到叶子节点)来进行检索，而不是通常地从根结点开始一步一步找到叶子节点
+    /* 首次查询时，判断是否利用快速AHI(自适应哈希索引，可以减少寻路到节点的开销，根据查询条件一次定位到叶子节点中记录所在的位置)来进行查询记录(先定位到游标再获取记录)，而不是通常地从根结点开始一步一步找到叶子节点
      * 1、如果 首次查询&&唯一性搜索&&主键索引&&没有BLOB, JSON、TEXT这些大列&&行=记录的长度不超过八分之一的page size
      * 2、当前没有锁表&&不是插入语句&&语句不加锁&& ISO >= RC && readview有效，即一致性读查询语句&&ISO>=RC&&readview有效
      * 3、因为是唯一性查询，查询一次后不会有后续查询，所以不需要store持久性游标
      * AHI参考 http://mysql.taobao.org/monthly/2015/09/01/  https://www.modb.pro/db/113573 https://zhuanlan.zhihu.com/p/164728032
-     * AHI是对已经加载到buffer pool中的数据页建立hash索引，可以根据查询关键字直接定位到叶子节点的数据页，减少寻路到叶子节点的成本
+     * AHI是对已经加载到buffer pool中的数据页建立hash索引，可以根据查询关键字直接定位到叶子节点的数据页的buffer pool block中的记录所在位置，而不用从根结点开始查询到叶子节点再定位到记录所在位置，减少寻路成本
      * 主键索引等值查询大部分使用AHI，其他索引大部分不使用AHI
      * */
 	if (UNIV_UNLIKELY(direction == 0) //首次读取
@@ -4975,10 +4976,10 @@ row_search_mvcc(
             /*对AHI的查删改操作都是通过一个全局读写锁btr_search_latch来保护*/
 			rw_lock_s_lock(btr_get_search_latch(index));
 			trx->has_search_latch = true;
-            /*尝试使用AHI进行快速查找到记录，即不用从根结点定位到叶子节点，再定位到某个记录。而是根据查询关键字直接定位到叶子节点，再定位到某个记录
-             *即定位B树游标cursor时，不从根结点开始找，而是根据查询关键字直接从自适应哈希表中定位到叶子节点。
-             *具体来说就是btr_cur_search_to_nth_level函数中has_search_latch参数为RW_S_LATCH，不为0
-             *因为是唯一性查询，查询一次后不会有后续查询，所以不需要store持久性游标
+            /*尝试使用AHI进行快速查找到记录，即不用从根结点定位到叶子节点，再定位到某个记录。注意定位到记录后就直接返回了，不会走后续的流程了。
+             * 而是根据查询关键字直接定位到叶子节点某个记录，即定位B树游标cursor时，不从根结点开始找，而是根据查询关键字直接从自适应哈希表中定位到记录的位置，将游标放置在该位置，再根据游标获取记录。
+             * 具体来说就是btr_cur_search_to_nth_level函数中has_search_latch参数为RW_S_LATCH，不为0
+             * 因为是唯一性查询，查询一次后不会有后续查询，所以不需要store持久性游标
              * */
 			switch (row_sel_try_search_shortcut_for_mysql(
 					&rec, prebuilt, &offsets, &heap,
@@ -4990,7 +4991,7 @@ row_search_mvcc(
 				The latch will not be released until
 				mtr_commit(&mtr). */
 				ut_ad(!rec_get_deleted_flag(rec, comp));
-
+                //如果有索引条件下推，进行ICP校验
 				if (prebuilt->idx_cond) {
 					switch (row_search_idx_cond_check(
 							buf, prebuilt,
@@ -4999,7 +5000,7 @@ row_search_mvcc(
 					case ICP_OUT_OF_RANGE:
                         /*因为使用AHI的前提是聚集索引且是唯一性搜索，至多只有一条记录，所以如果ICP不匹配，会直接返回DB_RECORD_NOT_FOUND，而不会读下一条，直接结束查询。这里和二级索引上ICP不同。*/
 						goto shortcut_mismatch;
-					case ICP_MATCH:
+					case ICP_MATCH://查询成功直接返回
 						goto shortcut_match;
 					}
 				}
@@ -5088,7 +5089,7 @@ row_search_mvcc(
 	      || srv_read_only_mode);
 
 	trx_start_if_not_started(trx, false);
-    /*设置gap锁标记，如果加锁&&ISO >=RR && 是select语句，设置为GAP标记为TRUE*/
+    /*默认为TRUE，如果加锁&&ISO <=RC && 是select语句，设置为GAP标记为false*/
 	if (trx->isolation_level <= TRX_ISO_READ_COMMITTED
 	    && prebuilt->select_lock_type != LOCK_NONE
 	    && trx->mysql_thd != NULL
@@ -5129,10 +5130,10 @@ row_search_mvcc(
 	/* Do some start-of-statement preparations */
     /*sql_stat_start为TRUE表示是第一次执行(所以查询第一条记录时为TRUE)，否则不是第一次执行(所以查询后续记录时为FALSE)
      * 首次查询：
-     *  如果一致性读：分配read view(不一定每次调用trx_assign_read_view都会重新生成，对于ISO >= RR，只在第一个查询语句在开始的时候生成一次。对于ISO <= RC，每个查询语句都会在开始的时候重新生成一次)
+     *  如果一致性读：分配read view(不一定每个SQL语句的首次查询调用trx_assign_read_view()都会重新生成read view，对于ISO >= RR，只在第一个查询语句在开始的时候生成一次。对于ISO <= RC，每个查询语句都会在开始的时候重新生成一次)
      *            注意一个查询语句生成一次readview后，在此语句执行期间(会多次调用row_search_mvcc)readview都有效。
-     *            对于ISO >= RR时，一个语句执行期间生成readview后，下一个语句执行时此readview依旧存在有效，所以不会重新生成
-     *            对于ISO <= RR时，一个语句执行期间生成readview后，下一个语句执行时此readview置空无效，所以会重新生成
+     *            对于ISO >= RR(可序列化隔离级别时一致性读会转换为加锁读，所以不会生成readview)时，同一个事务内，一个语句执行期间生成readview后，下一个语句执行时此readview依旧存在有效，所以不会重新生成，这种机制实现了可重复读和避免幻读。
+     *            对于ISO <= RC(读未提交隔离级别时会读取最新版本，并不会用到readview，所以生成了也没有影响)时，同一个事务内，一个语句执行期间生成readview后，下一个语句执行时此readview置空无效，所以会重新生成，这种机制实现了读已提交。
      *  如果是加锁读：为表加意向锁
      * */
 	if (!prebuilt->sql_stat_start) {
@@ -5308,12 +5309,13 @@ rec_loop:
 	/*-------------------------------------------------------------*/
 	/* PHASE 4: Look for matching records in a loop */
     /*根据游标获取对应位置的记录
-     *注意：对于一致性读来说，可能还要去找此记录对应的undo log中的历史版本，因为读到的记录是B树索引中的记录，位于MVCC版本链中的最新版本
+     *注意：对于一致性读来说，后面可能还要去找此记录对应的undo log中的历史版本，因为读到的记录是B树索引中的记录，位于MVCC版本链中的最新版本
      * */
 	rec = btr_pcur_get_rec(pcur);
 
 	ut_ad(!!page_rec_is_comp(rec) == comp);
-
+    /*对非用户记录的最小最大记录的特殊处理*/
+    //如果是最小记录，不处理，直接跳过查询下一条
 	if (page_rec_is_infimum(rec)) {
 
 		/* The infimum record on a page cannot be in the result set,
@@ -5323,7 +5325,7 @@ rec_loop:
 		prev_rec = NULL;
 		goto next_rec;
 	}
-
+    //如果是最大记录且是ISO>=RR的加锁查询，会为最大记录加ORDINARY锁(防止幻读)
 	if (page_rec_is_supremum(rec)) {
 
 		DBUG_EXECUTE_IF("compare_end_range",
@@ -5888,7 +5890,7 @@ locks_ok:
 	point that rec is on a buffer pool page. Functions like
 	page_rec_is_comp() cannot be used! */
     /*对已删除记录处理(带有删除标记)
-     *1、如果是ISO <= RC加锁读 && 没有进行半一致性读(即记录上加上了锁),则可以解除行锁(对该记录进行解锁，可能涉及二级索引和主键索引)，因为不需要保持间隙锁防止幻读
+     *1、如果是ISO <= RC加锁读 && 没有进行半一致性读(即记录上加上了锁),则可以解除行锁(对该记录进行解锁，可能涉及二级索引和主键索引)，因为不需要像ISO=RR那样保持锁防止幻读，ISO<=RC对于不满足条件的保持锁没有意义，所以进行解锁操作
      *2、如果是主键唯一性搜索，则可以直接返回DB_RECORD_NOT_FOUND，不需要进行后续步骤了
      *3、跳过删除标记的记录，查询下一条记录
      * */
@@ -5903,7 +5905,7 @@ locks_ok:
 
 			/* No need to keep a lock on a delete-marked record
 			if we do not want to use next-key locking. */
-            /*如果ISO <= RC，且没有进行半一致性读的加锁查询，对删除标记的记录解锁(如果回表了，也会对主键上加的锁进行解锁)*/
+            /*如果ISO <= RC，且没有进行半一致性读(如果进行了半一致性读则表示没有加锁，所以不需要进行解锁)的加锁查询，对删除标记的记录解锁(如果回表了，也会对主键上加的锁进行解锁)*/
 			row_unlock_for_mysql(prebuilt, TRUE);
 		}
 
@@ -5934,6 +5936,8 @@ locks_ok:
 	/* Check if the record matches the index condition. */
     /*二级索引ICP校验，主键索引直接会返回ICP_MATCH
      *如果是在二级索引在一致性读的时候为了判断可见性进行回表，则会先在回表前进行了一次ICP，所以会跳过这一步到后面去。不过都会进行一次ICP检查
+     *注意：当开启了ICP即(prebuilt->idx_cond为TRUE时)才进行ICP校验，同时会把innodb格式的记录rec转换为mysql格式且存储到buf中去。
+     *     如果没有开启ICP，则直接返回ICP_MATCH，并不会进行格式转换操作。
      * */
 	switch (row_search_idx_cond_check(buf, prebuilt, rec, offsets)) {
 	case ICP_NO_MATCH:
@@ -5953,10 +5957,12 @@ locks_ok:
 
 	/* Get the clustered index record if needed, if we did not do the
 	search using the clustered index. */
-    /* 判断是否需要回表查询：当索引是二级索引 && 查询聚集索引标记为TRUE时，进行回表操作
-     * need_to_access_clustered：表示是否需要查询聚集索引
-     *  如果时加锁操作(LOCK_X)则必须回表，值为TRUE。ha_innobase::build_template()中设置该值
-     *  如果查询的时二级索引且查询的字段有不在二级索引中的，需要回表。在build_template()->build_template_field()中设置该值
+    /* 判断是否需要回表查询：当索引是二级索引 && 查询聚集索引标记need_to_access_clustered为TRUE时，进行回表
+     * 如果是一致性读则去主键索引中的版本链表中获取可见性版本，如果是加锁读，读主键记录且为主键记录加NOT GAP锁)
+     *  need_to_access_clustered：判断是否需要查询聚集索引
+     *      1、如果是排他锁加锁操作(LOCK_X)则必须回表，值为TRUE。ha_innobase::build_template()中设置该值
+     *      2、如果查询的时二级索引且查询的字段有不在二级索引中的，则必须回表。在build_template()->build_template_field()中设置该值
+     *  总结回表条件：二级索引查询且(查询的字段不在当前索引中 或者 是排他加锁读)
      * */
 	if (index != clust_index && prebuilt->need_to_access_clustered) {
 /*
@@ -5980,7 +5986,7 @@ requires_clust_rec:
 		'clust_rec'. Note that 'clust_rec' can be an old version
 		built for a consistent read. */
         /*回表查询主键记录
-         * 如果是加锁读，则返回根据游标获取到的记录(最新版本)
+         * 如果是加锁读，则返回根据游标获取到的记录(最新版本)，对主键索引加NOT GAP锁
          * 如果是一致性读，则返回记录可见版本
          * */
 		err = row_sel_get_clust_rec_for_mysql(prebuilt, index, rec,
@@ -6082,8 +6088,9 @@ requires_clust_rec:
 	by a page latch that was acquired when pcur was positioned.
 	The latch will not be released until mtr_commit(&mtr). */
 
-    /*预取记录到缓存中取
-     *以便加速查询
+    /*预取记录到缓存队列中去，以便加速查询(函数会先尝试从缓存中获取)
+     *通过游标获取到的记录，需要返回给server层，所以这条记录不会填充到缓存队列中去
+     *然后再读取几条记录，再填充到缓存队列中去
      * */
 	if ((match_mode == ROW_SEL_EXACT
 	     || prebuilt->n_rows_fetched >= MYSQL_FETCH_CACHE_THRESHOLD) //精确匹配模式或者已取缓存记录数>=4(一个查询语句连续取出了4条记录)
@@ -6095,7 +6102,7 @@ requires_clust_rec:
 	    && !prebuilt->used_in_HANDLER
 	    && !prebuilt->innodb_api
 	    && prebuilt->template_type != ROW_MYSQL_DUMMY_TEMPLATE
-	    && !prebuilt->in_fts_query) {
+	    && !prebuilt->in_fts_query) {//全文索引
 
 		/* Inside an update, for example, we do not cache rows,
 		since we may use the cursor position to do the actual
@@ -6110,7 +6117,9 @@ requires_clust_rec:
 
 		/* We only convert from InnoDB row format to MySQL row
 		format when ICP is disabled. */
-
+        /*当没有开启ICP时，需要将查询到的innodb格式记录result_rec转换为mysql格式且存储到next_buf
+         *而开始ICP时，则不需要转换格式这一步。原因时进行ICP检验是，如果开启了ICP，检验的时后就会进行一次格式格式转换操作，所以不需要在这里再进行格式转换
+         * */
 		if (!prebuilt->idx_cond) {
 
 			/* We use next_buf to track the allocation of buffers
@@ -6126,7 +6135,10 @@ requires_clust_rec:
 			was not written to then we reset next_buf so that
 			we can re-use the MySQL record buffer in the next
 			iteration. */
-
+            /*next_buf初始为0，当通过非缓存方式获取到记录时(游标)，next_buf赋值为buf(需要返回给server层的记录)
+             * 当后续需要预取多条记录填充到缓存队列中去时，判断是否时需要返回给server层的记录，如果不是则ext_buf赋值为缓存队列的队尾
+             * 这个要和后面的next_buf != buf一起分析
+             * */
 			next_buf = next_buf
 				 ? row_sel_fetch_last_buf(prebuilt) : buf;
 
@@ -6150,16 +6162,22 @@ requires_clust_rec:
 				level, not here. */
 				goto next_rec;
 			}
-
+            /*即，通过游标获取到的记录(不是通过记录缓存获取到的记录)，会返回给上一层，所以不用填充到记录缓存队列中去
+             * 当通过游标获取到记录后，如果满足预取记录条件，则会接着读取至多8条数据填充到记录缓存队列中去，这时读取的记录才会填充到缓存队列中去，
+             * 此时next_buf就不是mysql记录缓冲buf了，而是fetch_cache记录缓存队列中的队尾了，
+             * 此时后面查到的记录就会填充到fetch_cache记录缓存队列中去了
+             * */
 			if (next_buf != buf) {
 				row_sel_enqueue_cache_row_for_mysql(
 					next_buf, prebuilt);
 			}
 		} else {
-            /*向预取缓存中填充记录(这一步不是很明白，不是填满吗？这里怎么只时填充1条记录)*/
+            /*向预取缓存中填充一条记录*/
 			row_sel_enqueue_cache_row_for_mysql(buf, prebuilt);
 		}
-
+        /*这里的意思是一次预取缓存要读取8条记录到缓存中
+         * 每执行一次row_sel_enqueue_cache_row_for_mysql只会缓存一条记录，所以跳转到next_rec重复获取下一条记录再存进来，一直存够8条才停止
+         * 当满足条件的记录没有8条也会停止？？？具体在哪里作这一步判断的？是不是在ICP那里直接返回了。*/
 		if (prebuilt->n_fetch_cached < MYSQL_FETCH_CACHE_SIZE) {
 			goto next_rec;
 		}
@@ -6186,6 +6204,7 @@ requires_clust_rec:
 					rec_offs_extra_size(offsets) + 4);
 		} else if (!prebuilt->idx_cond && !prebuilt->innodb_api) {
 			/* The record was not yet converted to MySQL format. */
+            /*将innodb格式转换为Mysql格式*/
 			if (!row_sel_store_mysql_rec(
 				    buf, prebuilt, result_rec, vrow,
 				    result_rec != rec,
@@ -6368,6 +6387,7 @@ next_rec:
 			move = rtr_pcur_move_to_next(
 				search_tuple, mode, pcur, 0, &mtr);
 		} else {
+            //如果游标位于索引树的最后位置，则没有下一个位置了，会返回false。只要不是最后位置都为true
 			move = btr_pcur_move_to_next(pcur, &mtr);
 		}
 

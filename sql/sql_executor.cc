@@ -952,6 +952,7 @@ do_select(JOIN *join)
   }
   else
   {
+    //qep_tab表示要查询的驱动表
     QEP_TAB *qep_tab= join->qep_tab + join->const_tables;
     assert(join->primary_tables);
     error= join->first_select(join,qep_tab,0);
@@ -1275,7 +1276,19 @@ sub_select(JOIN *join, QEP_TAB *const qep_tab,bool end_of_records)
   const bool pfs_batch_update= qep_tab->pfs_batch_update(join);
   if (pfs_batch_update)
     qep_tab->table()->file->start_psi_batch_mode();
-  /*除了NESTED_LOOP_OK都会终止嵌套循环*/
+  /*进行嵌套循环连接查询
+   * 比如对于连接查询a join b join c，如果执行计划判断先查a再查b再查c(a驱动b驱动c)
+   *    则先对a表进行查询，一次查询一条，如果查询失败则结束查询，如果查询到一条记录，则
+   *        根据a中查询到的记录再去对b表进行查询(递归sub_select)，一次查询一条，如果查询失败则结束查询(本级递归结束返回到a)，如果查询到一条记录，则
+   *            根据b中查询到的记录再去对c表进行查询(递归sub_select)，一次查询一条，如果查询失败则结束查询(本级递归结束返回到a)。
+   *  while(查询a一条记录成功){
+   *    while(查询b一条记录成功){
+   *        while(查询b一条记录成功){
+   *        }
+   *    }
+   *  }
+   *
+   * 除了NESTED_LOOP_OK都会终止嵌套循环*/
   while (rc == NESTED_LOOP_OK && join->return_tab >= qep_tab_idx)
   {
     int error;
@@ -1300,12 +1313,13 @@ sub_select(JOIN *join, QEP_TAB *const qep_tab,bool end_of_records)
       rc= NESTED_LOOP_KILLED;
     }
     else
-    {
+    { //error == 0
       if (qep_tab->keep_current_rowid)
         qep_tab->table()->file->position(qep_tab->table()->record[0]);
-      /* 存储引擎根据索引条件成功返回记录后，再进行判断where条件
-       * 如果满足则继续查询关联的下一张表
-       * 不满足则进行解锁操作。解锁操作都是调用unlock_row函数，此函数只有当ISO <= RC时才会解锁 */
+      /*对查询到记录进行处理(嵌套查询或者解锁)
+       * 存储引擎根据索引条件成功返回记录后(error==0)，进行判断where条件
+       * 1、如果满足则继续查询关联的下一张表(嵌套查询，递归到sub_select)
+       * 2、如果不满足则进行解锁操作。解锁操作都是调用unlock_row函数，此函数只有当ISO <= RC时才会解锁 */
       rc= evaluate_join_record(join, qep_tab);
     }
   }
@@ -1492,13 +1506,14 @@ evaluate_join_record(JOIN *join, QEP_TAB *const qep_tab)
   ha_rows found_records=join->found_records;
   Item *condition= qep_tab->condition();
   const plan_idx qep_tab_idx= qep_tab->idx();
+  //是否满足where条件，初始值为TRUE(即如果没有where条件，则表示满足条件)
   bool found= TRUE;
   DBUG_ENTER("evaluate_join_record");
   DBUG_PRINT("enter",
              ("join: %p join_tab index: %d table: %s cond: %p",
               join, static_cast<int>(qep_tab_idx),
               qep_tab->table()->alias, condition));
-
+  //如果该表有where条件
   if (condition)
   { /*校验where条件*/
     found= MY_TEST(condition->val_int());
@@ -1653,7 +1668,7 @@ evaluate_join_record(JOIN *join, QEP_TAB *const qep_tab)
       enum enum_nested_loop_state rc;
       // A match is found for the current partial join prefix.
       qep_tab->found_match= true;
-      /*关联查询下一张表*/
+      /*关联查询下一张表(会最后调用到sub_select)*/
       rc= (*qep_tab->next_select)(join, qep_tab+1, 0);
       join->thd->get_stmt_da()->inc_current_row_for_condition();
       if (rc != NESTED_LOOP_OK)

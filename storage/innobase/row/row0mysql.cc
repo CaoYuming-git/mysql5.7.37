@@ -2737,7 +2737,7 @@ row_unlock_for_mysql(
 
 	ut_ad(prebuilt != NULL);
 	ut_ad(trx != NULL);
-
+    //当ISO >= RR时不解锁(防止幻读)
 	if (UNIV_UNLIKELY
 	    (!srv_locks_unsafe_for_binlog
 	     && trx->isolation_level > TRX_ISO_READ_COMMITTED)) {

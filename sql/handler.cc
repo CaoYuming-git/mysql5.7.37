@@ -6446,7 +6446,7 @@ int handler::multi_range_read_next(char **range_info)
 
   // Set status for the need to update generated fields
   m_update_generated_read_fields= table->has_gcol();
-
+ //mrr_have_range最开始初始化为false，会先跳到start执行
   if (!mrr_have_range)
   {
     mrr_have_range= TRUE;
@@ -6458,6 +6458,7 @@ int handler::multi_range_read_next(char **range_info)
     /* Save a call if there can be only one row in range. */
     if (mrr_cur_range.range_flag != (UNIQUE_RANGE | EQ_RANGE))
     {
+        //获取后续记录
       result= read_range_next();
       /* On success or non-EOF errors jump to the end. */
       if (result != HA_ERR_END_OF_FILE)
@@ -6474,6 +6475,7 @@ start:
     while (!(range_res= mrr_funcs.next(mrr_iter, &mrr_cur_range)))
     {
 scan_it_again:
+        //获取第一条记录
       result= read_range_first(mrr_cur_range.start_key.keypart_map ?
                                  &mrr_cur_range.start_key : 0,
                                mrr_cur_range.end_key.keypart_map ?
@@ -7405,7 +7407,9 @@ int handler::read_range_first(const key_range *start_key,
   set_end_range(end_key, RANGE_SCAN_ASC);
 
   range_key_part= table->key_info[active_index].key_part;
-
+/*
+ * 将记录读到table->record[0]
+ * */
   if (!start_key)			// Read first record
     result= ha_index_first(table->record[0]);
   else
