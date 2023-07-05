@@ -5520,8 +5520,9 @@ wrong_offs:
 	match enough. */
 
     /*
-     * 下面时对精确匹配模式在ISO >= RR下加锁读的优化
-     * 即对精确匹配模式下第一条不满足条件的记录加GAP锁，而不是加ORDINARY锁
+     * 下面时对精确匹配模式加锁读的优化：
+     * 在ISO >= RR下，对精确匹配模式下第一条不满足条件的记录优化为加GAP锁，而不是加ORDINARY锁
+     * 在ISO <= RC下，对精确匹配模式下第一条不满足条件的记录优化为不加锁，直接返回DB_RECORD_NOT_FOUND结束查询
      *
      *up_match和low_match分别对应low_rec和up_rec与tuple匹配的字段数
      *rec就是cursor定位的位置对应的记录。mode为>,>=下，定位到up_rec。mode为<,<=下，定位到low_rec
@@ -5578,7 +5579,10 @@ wrong_offs:
 			(pcur->old_rec). */
 			ut_ad(pcur->rel_pos == BTR_PCUR_ON);
 			pcur->rel_pos = BTR_PCUR_BEFORE;
-            //结束查询
+            /*结束查询
+             *注意： 如果ISO>=RR,会优化为加GAP锁
+             *      如果ISO<=RC,没有上面一步的加GAP锁操作，会优化为不加锁。
+             * */
 			err = DB_RECORD_NOT_FOUND;
 			goto normal_return;
 		}
