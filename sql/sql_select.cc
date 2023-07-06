@@ -1683,6 +1683,7 @@ static Item *make_cond_remainder(Item *cond, bool exclude_index)
 
 
 /**
+ * 此函数只在查询语句中才会被调用，然后只有在范围查询(JT_RANGE)和索引合并(JT_INDEX_MERGE)的时后才会执行到此，所以索引下推只适用于select语句且是执行计划的访问方式是范围查询和索引合并，insert/update/delete都不适用
   Try to extract and push the index condition down to table handler
 
   @param  join_tab       join_tab for table
@@ -1759,20 +1760,29 @@ void QEP_TAB::push_index_cond(const JOIN_TAB *join_tab,
        re-evaluated when WL#6061 is implemented.
     7. The index on virtual generated columns is not supported for ICP.
   */
-  if (condition() &&
+  /**
+   * 使用ICP条件为：
+   *  1、此函数只在查询语句中才会被调用，然后只有在范围查询和索引合并的时后才会执行到此，所以索引下推只适用于select语句且是执行计划的访问方式是范围查询和索引合并，insert/update/delete都不适用
+   *  2、有查询条件且有当前索引中的查询条件
+   *  3、存储引擎支持且开启了ICP
+   *  4、不是const/system查询
+   *  5、不是主键索引(只有二级索引能够使用)
+   */
+  if (condition() && //有查询条件
       tbl->file->index_flags(keyno, 0, 1) &
-      HA_DO_INDEX_COND_PUSHDOWN &&
+      HA_DO_INDEX_COND_PUSHDOWN && //存储引擎支持ICP
       hint_key_state(join_->thd, tbl, keyno, ICP_HINT_ENUM,
-                     OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN) &&
-      join_->thd->lex->sql_command != SQLCOM_UPDATE_MULTI &&
-      join_->thd->lex->sql_command != SQLCOM_DELETE_MULTI &&
+                     OPTIMIZER_SWITCH_INDEX_CONDITION_PUSHDOWN) && //打开ICP开关
+      join_->thd->lex->sql_command != SQLCOM_UPDATE_MULTI && //不是多表更新语句
+      join_->thd->lex->sql_command != SQLCOM_DELETE_MULTI && //不是多表删除语句
       !has_guarded_conds() &&
-      type() != JT_CONST && type() != JT_SYSTEM &&
+      type() != JT_CONST && type() != JT_SYSTEM && //不是const(主键或者唯一二级索引非NULL等值匹配) || system(表中只有一行记录)
       !(keyno == tbl->s->primary_key &&
-        tbl->file->primary_key_is_clustered()))
+        tbl->file->primary_key_is_clustered()))//不是主键索引
   {
     DBUG_EXECUTE("where", print_where(condition(), "full cond",
                  QT_ORDINARY););
+    //从查询条件中过滤处可以下推的条件
     Item *idx_cond= make_cond_for_index(condition(), tbl,
                                         keyno, other_tbls_ok);
     DBUG_EXECUTE("where", print_where(idx_cond, "idx cond", QT_ORDINARY););
@@ -1827,6 +1837,7 @@ void QEP_TAB::push_index_cond(const JOIN_TAB *join_tab,
       }
       else
       {
+        //调用idx_cond_push进行实际的下推工作，把条件下推到索引中去
         idx_remainder_cond= tbl->file->idx_cond_push(keyno, idx_cond);
         DBUG_EXECUTE("where",
                      print_where(tbl->file->pushed_idx_cond, "icp cond", 
@@ -2249,7 +2260,7 @@ make_join_readinfo(JOIN *join, uint no_jbuf_after)
         }
       }
       break;
-    case JT_RANGE:
+    case JT_RANGE://索引条件下推函数只在范围查询和索引合并是才可能进行
     case JT_INDEX_MERGE:
       if (statistics)
       {
@@ -2265,7 +2276,8 @@ make_join_readinfo(JOIN *join, uint no_jbuf_after)
           assert(qep_tab->quick()->index != MAX_KEY);
           table->set_keyread(TRUE);
         }
-        if (!table->key_read)/*设置索引条件下推相关参数*/
+        if (!table->key_read)
+            /*如果不是只访问索引树(不是索引覆盖，要回表才行，ICP的目的就是减少回表)，设置索引条件下推相关参数*/
           qep_tab->push_index_cond(tab, qep_tab->quick()->index,
                                    &trace_refine_table);
       }
