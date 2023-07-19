@@ -7019,7 +7019,10 @@ build_template_field(
 
 /**************************************************************//**
 Builds a 'template' to the m_prebuilt struct. The template is used in fast
-retrieval of just those column values MySQL needs in its processing. */
+retrieval of just those column values MySQL needs in its processing.
+
+ 构建模板(包含了查询中需要的各种信息)
+ */
 
 void
 ha_innobase::build_template(
@@ -8287,7 +8290,7 @@ ha_innobase::update_row(
 
 	/* Build an update vector from the modified fields in the rows
 	(uses m_upd_buf of the handle) */
-
+    /*把需要更新的字段和更新的值读取到uvect，更新向量中去*/
 	error = calc_row_difference(
 		uvect, old_row, new_row, table, m_upd_buf, m_upd_buf_size,
 		m_prebuilt, m_user_thd);
@@ -8309,7 +8312,7 @@ ha_innobase::update_row(
 	m_prebuilt->upd_node->is_delete = FALSE;
 
 	innobase_srv_conc_enter_innodb(m_prebuilt);
-
+    /*更新记录*/
 	error = row_update_for_mysql((byte*) old_row, m_prebuilt);
 
 	/* We need to do some special AUTOINC handling for the following case:
@@ -8545,7 +8548,7 @@ ha_innobase::try_semi_consistent_read(bool yes)
 	requested by the MySQL and either innodb_locks_unsafe_for_binlog
 	option is used or this session is using READ COMMITTED isolation
 	level. */
-
+    /*当ISO<=RC时才可以开启半一致性读*/
 	if (yes
 	    && (srv_locks_unsafe_for_binlog
 		|| m_prebuilt->trx->isolation_level
@@ -15631,6 +15634,9 @@ the THD in the handle. We will also use this function to communicate
 to InnoDB that a new SQL statement has started and that we must store a
 savepoint to our transaction handle, so that we are able to roll back
 the SQL statement in case of an error.
+
+external lock()，并不是实际上加锁，仅仅是设置某些标记
+https://developer.aliyun.com/article/40918
 @return 0 */
 
 int
@@ -15667,6 +15673,9 @@ ha_innobase::external_lock(
 	Note: decide_logging_format would give the same error message,
 	except it cannot give the extra details. */
 
+    /*READ-COMMITTED(RC)、READ-UNCOMMITTED下不能使用statement格式binlog
+     * http://mysql.taobao.org/monthly/2018/08/04/
+     * */
 	if (lock_type == F_WRLCK
 	    && !(table_flags() & HA_BINLOG_STMT_CAPABLE)
 	    && thd_binlog_format(thd) == BINLOG_FORMAT_STMT
@@ -15761,7 +15770,11 @@ ha_innobase::external_lock(
 	case QUIESCE_NONE:
 		break;
 	}
-
+    /* UPDATE/DELETE需要阻止并发对同一行数据进行修改语句的执行
+     * 根据lock_type 来设置m_prebuilt的查询加锁类型
+     * 比如delete 或者 update 或者 select ... for update操作时lock_type为F_WRLCK，m_prebuilt->select_lock_type设置为LOCK_X锁进行查询
+     * http://mysql.taobao.org/monthly/2018/05/04/
+     * */
 	if (lock_type == F_WRLCK) {
 
 		/* If this is a SELECT, then it is in UPDATE TABLE ...
@@ -15774,7 +15787,9 @@ ha_innobase::external_lock(
 		/* MySQL is setting a new table lock */
 
 		*trx->detailed_error = 0;
-
+        /*存储引擎向mysql注册自己
+         * https://cloud.tencent.com/developer/article/1735517
+         * */
 		innobase_register_trx(ht, thd, trx);
 
 		if (trx->isolation_level == TRX_ISO_SERIALIZABLE

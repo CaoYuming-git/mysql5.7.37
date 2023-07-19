@@ -3509,7 +3509,7 @@ btr_cur_upd_lock_and_undo(
 
 	ut_ad(rec_offs_validate(rec, index, offsets));
 	ut_ad(mtr->is_named_space(index->space));
-
+    //只有在更新主键索引记录时才记录undo log
 	if (!dict_index_is_clust(index)) {
 		ut_ad(dict_index_is_online_ddl(index)
 		      == !!(flags & BTR_CREATE_FLAG));
@@ -3534,7 +3534,7 @@ btr_cur_upd_lock_and_undo(
 	}
 
 	/* Append the info about the update in the undo log */
-
+    /*记录undo log*/
 	return(trx_undo_report_row_operation(
 		       flags, TRX_UNDO_MODIFY_OP, thr,
 		       index, NULL, update,
@@ -3765,6 +3765,11 @@ out_of_space:
 /*************************************************************//**
 Updates a record when the update causes no size changes in its fields.
 We assume here that the ordering fields of the record do not change.
+ 就地更新(前提是所有的字段大小都没有改变)步骤:
+ 1、写undo log
+ 2、更新roll_ptr(指向前面的undo log)和trx_id
+ 3、更新记录
+ 4、写redo log
 @return locking or undo log related error code, or
 @retval DB_SUCCESS on success
 @retval DB_ZIP_OVERFLOW if there is not enough space left
@@ -3835,6 +3840,8 @@ btr_cur_update_in_place(
 	}
 
 	/* Do lock checking and undo logging */
+
+    /*写undo log*/
 	err = btr_cur_upd_lock_and_undo(flags, cursor, offsets,
 					update, cmpl_info,
 					thr, mtr, &roll_ptr);
@@ -3845,6 +3852,7 @@ btr_cur_update_in_place(
 		goto func_exit;
 	}
 
+    /*更新roll_ptr(指向前面的undo log)和trx_id*/
 	if (!(flags & BTR_KEEP_SYS_FLAG)
 	    && !dict_table_is_intrinsic(index->table)) {
 		row_upd_rec_sys_fields(rec, NULL, index, offsets,
@@ -3877,12 +3885,14 @@ btr_cur_update_in_place(
 	}
 
 	assert_block_ahi_valid(block);
+    /*更新记录*/
 	row_upd_rec_in_place(rec, index, offsets, update, page_zip);
 
 	if (is_hashed) {
 		rw_lock_x_unlock(btr_get_search_latch(index));
 	}
 
+    /*写redo log*/
 	btr_cur_update_in_place_log(flags, rec, index, update,
 				    trx_id, roll_ptr, mtr);
 
@@ -3961,7 +3971,7 @@ btr_cur_optimistic_update(
 
 	block = btr_cur_get_block(cursor);
 	page = buf_block_get_frame(block);
-	rec = btr_cur_get_rec(cursor);
+	rec = btr_cur_get_rec(cursor);//要更新的记录
 	index = cursor->index;
 	ut_ad(trx_id > 0
 	      || (flags & BTR_KEEP_SYS_FLAG)
@@ -3987,7 +3997,9 @@ btr_cur_optimistic_update(
 	ut_a(!rec_offs_any_null_extern(rec, *offsets)
 	     || trx_is_recv(thr_get_trx(thr)));
 #endif /* UNIV_DEBUG || UNIV_BLOB_LIGHT_DEBUG */
-
+    /*注意：调用此函数的前提是主键索引记录更新，且主键值不变化
+     * 如果当该索引记录中每个字段的大小都没有变化 && 有大字段存储在记录外部：则执行就地更新(在原记录上修改)，
+     * 如果当该索引记录中有某个字段的大小发生了变化：则不能执行就地更新，需要先删除当前记录(不是标记删除，就是直接删除，也就是把这条记录从正常记录链表中移除并加入到垃圾链表中)，再插入一条新记录*/
 	if (!row_upd_changes_field_size_or_external(index, *offsets, update)) {
 
 		/* The simplest and the most common case: the update does not
@@ -4031,7 +4043,7 @@ any_extern:
 			rec_offs_size(*offsets)
 			+ DTUPLE_EST_ALLOC(rec_offs_n_fields(*offsets)));
 	}
-
+    //将需要更新的记录转换格式到new_entry中
 	new_entry = row_rec_to_index_entry(rec, index, *offsets,
 					   &n_ext, *heap);
 	/* We checked above that there are no externally stored fields. */
@@ -4040,6 +4052,7 @@ any_extern:
 	/* The page containing the clustered index record
 	corresponding to new_entry is latched in mtr.
 	Thus the following call is safe. */
+    /*将需要更新的字段值赋值到new_entry中*/
 	row_upd_index_replace_new_col_vals_index_pos(new_entry, index, update,
 						     FALSE, *heap);
 	old_rec_size = rec_offs_size(*offsets);
@@ -4118,6 +4131,7 @@ any_extern:
 	}
 
 	/* Do lock checking and undo logging */
+    /*写undo log*/
 	err = btr_cur_upd_lock_and_undo(flags, cursor, *offsets,
 					update, cmpl_info,
 					thr, mtr, &roll_ptr);
@@ -4134,9 +4148,9 @@ any_extern:
 	if (!dict_table_is_locking_disabled(index->table)) {
 		lock_rec_store_on_page_infimum(block, rec);
 	}
-
+    //更新记录所在页面的hash索引
 	btr_search_update_hash_on_delete(cursor);
-
+    //先删除记录(非标记删除)
 	page_cur_delete_rec(page_cursor, index, *offsets, mtr);
 
 	page_cur_move_to_prev(page_cursor);
@@ -4148,7 +4162,7 @@ any_extern:
 		row_upd_index_entry_sys_field(new_entry, index, DATA_TRX_ID,
 					      trx_id);
 	}
-
+    //再插入新记录到页中去
 	/* There are no externally stored columns in new_entry */
 	rec = btr_cur_insert_if_possible(
 		cursor, new_entry, offsets, heap, 0/*n_ext*/, mtr);
@@ -4305,7 +4319,7 @@ btr_cur_pessimistic_update(
 	      || (flags & ~BTR_KEEP_POS_FLAG)
 	      == (BTR_NO_UNDO_LOG_FLAG | BTR_NO_LOCKING_FLAG
 		  | BTR_CREATE_FLAG | BTR_KEEP_SYS_FLAG));
-
+    /*尝试乐观更新，应该失败，因为调用悲观更新之前已经调用了乐观更新且失败了*/
 	err = optim_err = btr_cur_optimistic_update(
 		flags | BTR_KEEP_IBUF_BITMAP,
 		cursor, offsets, offsets_heap, update,
@@ -4341,7 +4355,7 @@ btr_cur_pessimistic_update(
 
 	*offsets = rec_get_offsets(
 		rec, index, *offsets, ULINT_UNDEFINED, offsets_heap);
-
+    /*将需要更新的记录转换为dtuple_t结构中去*/
 	dtuple_t*	new_entry = row_rec_to_index_entry(
 		rec, index, *offsets, &n_ext, entry_heap);
 
@@ -4350,7 +4364,7 @@ btr_cur_pessimistic_update(
 	clustered index record is delete-marked, then its externally
 	stored fields cannot have been purged yet, because then the
 	purge would also have removed the clustered index record
-	itself.  Thus the following call is safe. */
+	itself.  Thus the following call is safe. */ /*将需要更新的字段值更改到dtuple_t结构中*/
 	row_upd_index_replace_new_col_vals_index_pos(new_entry, index, update,
 						     FALSE, entry_heap);
 
@@ -4418,6 +4432,7 @@ btr_cur_pessimistic_update(
 	}
 
 	/* Do lock checking and undo logging */
+    /*写undo log*/
 	err = btr_cur_upd_lock_and_undo(flags, cursor, *offsets,
 					update, cmpl_info,
 					thr, mtr, &roll_ptr);
@@ -4442,7 +4457,7 @@ btr_cur_pessimistic_update(
 			goto err_exit;
 		}
 	}
-
+    /*更新roll_ptr到undo log、更新trx_id*/
 	if (!(flags & BTR_KEEP_SYS_FLAG)
 	    && !dict_table_is_intrinsic(index->table)) {
 		row_upd_index_entry_sys_field(new_entry, index, DATA_ROLL_PTR,
@@ -4467,21 +4482,21 @@ btr_cur_pessimistic_update(
 	if (!dict_table_is_locking_disabled(index->table)) {
 		lock_rec_store_on_page_infimum(block, rec);
 	}
-
+    /*更新这个页面的哈希索引*/
 	btr_search_update_hash_on_delete(cursor);
 
 #ifdef UNIV_ZIP_DEBUG
 	ut_a(!page_zip || page_zip_validate(page_zip, page, index));
 #endif /* UNIV_ZIP_DEBUG */
 	page_cursor = btr_cur_get_page_cur(cursor);
-
+    /*删除记录(真实删除，移动到垃圾链表)*/
 	page_cur_delete_rec(page_cursor, index, *offsets, mtr);
-
+    /*将游标移动到上一条记录上*/
 	page_cur_move_to_prev(page_cursor);
-
+    /*这里其实也相当于是尝试乐观插入(btr_cur_optimistic_insert)，最后都是调用btr_cur_insert_if_possible()进行插入操作。但是btr_cur_optimistic_insert可能会因为记录的大小直接返回溢出错误，而没有调用btr_cur_insert_if_possible进行插入，这里直接调用btr_cur_insert_if_possible进行插入*/
 	rec = btr_cur_insert_if_possible(cursor, new_entry,
 					 offsets, offsets_heap, n_ext, mtr);
-
+    /*乐观插入成功*/
 	if (rec) {
 		page_cursor->rec = rec;
 
@@ -4529,10 +4544,11 @@ btr_cur_pessimistic_update(
 			/* NOTE: We cannot release root block latch here, because it
 			has segment header and already modified in most of cases.*/
 		}
-
+        /*如果尝试乐观插入成功，就直接返回不用进行悲观插入了*/
 		err = DB_SUCCESS;
 		goto return_after_reservations;
 	} else {
+        /*乐观插入失败，后面会尝试悲观插入*/
 		/* If the page is compressed and it initially
 		compresses very well, and there is a subsequent insert
 		of a badly-compressing record, it is possible for
@@ -4578,7 +4594,7 @@ btr_cur_pessimistic_update(
 	btr_cur_upd_lock_and_undo(). We do not try
 	btr_cur_optimistic_insert() because
 	btr_cur_insert_if_possible() already failed above. */
-
+    /*乐观插入失败，进行悲观插入记录*/
 	err = btr_cur_pessimistic_insert(BTR_NO_UNDO_LOG_FLAG
 					 | BTR_NO_LOCKING_FLAG
 					 | BTR_KEEP_SYS_FLAG,
@@ -4783,6 +4799,11 @@ Marks a clustered index record deleted. Writes an undo log record to
 undo log on this delete marking. Writes in the trx id field the id
 of the deleting transaction, and in the roll ptr field pointer to the
 undo log record created.
+ 标记删除主键记录(对于原记录实际只更新了删除标记、roll_ptr、trx_id字段)：
+ 1、写undo log
+ 2、为记录加上删除标记
+ 3、更新记录上的roll_ptr指向到undo log上，更新trx_id
+ 4、写redo log
 @return DB_SUCCESS, DB_LOCK_WAIT, or error number */
 dberr_t
 btr_cur_del_mark_set_clust_rec(
@@ -4822,7 +4843,7 @@ btr_cur_del_mark_set_clust_rec(
 
 		return(err);
 	}
-
+    /*写undo log*/
 	err = trx_undo_report_row_operation(flags, TRX_UNDO_MODIFY_OP, thr,
 					    index, entry, NULL, 0, rec, offsets,
 					    &roll_ptr);
@@ -4836,7 +4857,7 @@ btr_cur_del_mark_set_clust_rec(
 	and the delete-mark is being updated in place. */
 
 	page_zip = buf_block_get_page_zip(block);
-
+    /*设置删除标记*/
 	btr_rec_set_deleted_flag(rec, page_zip, TRUE);
 
 	/* For intrinsic table, roll-ptr is not maintained as there is no UNDO
@@ -4860,9 +4881,9 @@ btr_cur_del_mark_set_clust_rec(
 	if (dict_index_is_online_ddl(index)) {
 		row_log_table_delete(rec, entry, index, offsets, NULL);
 	}
-
+    /*设置roll_ptr指向到删除undo log，更新trx_id*/
 	row_upd_rec_sys_fields(rec, page_zip, index, offsets, trx, roll_ptr);
-
+    /*写redo log*/
 	btr_cur_del_mark_set_clust_rec_log(rec, index, trx->id,
 					   roll_ptr, mtr);
 

@@ -2550,9 +2550,9 @@ row_update_for_mysql_using_upd_graph(
 	}
 
 	node = prebuilt->upd_node;
-
+    /*主键索引*/
 	clust_index = dict_table_get_first_index(table);
-
+    /*将主键索引中的游标复制到node中*/
 	if (prebuilt->pcur->btr_cur.index == clust_index) {
 		btr_pcur_copy_stored_position(node->pcur, prebuilt->pcur);
 	} else {
@@ -2568,7 +2568,7 @@ row_update_for_mysql_using_upd_graph(
 	from mysql_rec if the clustered index was automatically
 	generated for the table: MySQL does not know anything about
 	the row id used as the clustered index key */
-
+	/*保存点，用于事务回滚*/
 	savept = trx_savept_take(trx);
 
 	thr = que_fork_get_first_thr(prebuilt->upd_graph);
@@ -2584,7 +2584,7 @@ run_again:
 	thr->run_node = node;
 	thr->prev_node = node;
 	thr->fk_cascade_depth = 0;
-
+    /*更新记录*/
 	row_upd_step(thr);
 
 	err = trx->error_state;

@@ -850,7 +850,7 @@ trx_undo_get_mbr_from_ext(
 
 /**********************************************************************//**
 Reports in the undo log of an update or delete marking of a clustered index
-record.
+record. 写入undo log，同时也会写入这个undo log对应页面的redo log
 @return byte offset of the inserted undo log entry on the page if
 succeed, 0 if fail */
 static
@@ -1398,7 +1398,7 @@ trx_undo_page_report_modify(
 			ptr - undo_page);
 
 	/* Write to the REDO log about this change in the UNDO log */
-
+    //这个undo log页面的redo日志
 	trx_undof_page_add_undo_rec_log(undo_page, first_free,
 					ptr - undo_page, mtr);
 	return(first_free);
@@ -1992,7 +1992,7 @@ trx_undo_report_row_operation(
 			break;
 		default:
 			ut_ad(op_type == TRX_UNDO_MODIFY_OP);
-			offset = trx_undo_page_report_modify(
+			offset = trx_undo_page_report_modify( //写undo log操作
 				undo_page, trx, index, rec, offsets, update,
 				cmpl_info, clust_entry, &mtr);
 		}

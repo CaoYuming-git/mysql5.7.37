@@ -2147,11 +2147,13 @@ row_ins_scan_sec_index_for_duplicate(
 			duplicate key we will take X-lock for
 			duplicates ( REPLACE, LOAD DATAFILE REPLACE,
 			INSERT ON DUPLICATE KEY UPDATE). */
-            /* 如果是 insert on duplicate key update，即如果存在相同索引值时更新这条记录时，设置排他LOCK_ORDINARY锁，因为要执行更新这条重复记录的操作,在5.7.21中加锁的类型也是ORDINARY锁 */
+            /* 如果是 insert on duplicate key update，即如果存在相同索引值时更新这条记录时，设置排他LOCK_ORDINARY锁，因为要执行更新这条重复记录的操作,在5.7.21中加锁的类型也是ORDINARY锁
+             * 在这条记录上加锁是为了保证该记录已被事务提交(可能涉及插入记录的隐式锁转换)*/
 			err = row_ins_set_exclusive_rec_lock(
 				lock_type, block, rec, index, offsets, thr);
 		} else {
-            /* 如果不是 insert on duplicate key update，即设置共享LOCK_ORDINARY锁，因为不需要执行更新这条重复记录的操作,在5.7.21中加锁的类型也是ORDINARY锁  */
+            /* 如果不是 insert on duplicate key update，即设置共享LOCK_ORDINARY锁，因为不需要执行更新这条重复记录的操作,在5.7.21中加锁的类型也是ORDINARY锁
+             * 在这条记录上加锁是为了保证该记录已被事务提交(可能涉及插入记录的隐式锁转换)*/
 			err = row_ins_set_shared_rec_lock(
 				lock_type, block, rec, index, offsets, thr);
 		}
@@ -2173,7 +2175,7 @@ row_ins_scan_sec_index_for_duplicate(
 		cmp = cmp_dtuple_rec(entry, rec, offsets);
 
 		if (cmp == 0 && !index->allow_duplicates) {
-            /* 加锁后进行冲突判断 */
+            /* 加锁后进行冲突判断(保证唯一性约束) */
 			if (row_ins_dupl_error_with_rec(rec, entry,
 							index, offsets)) {
 				err = DB_DUPLICATE_KEY;
@@ -2354,13 +2356,15 @@ row_ins_duplicate_error_in_clust(
 				duplicate key we will take X-lock for
 				duplicates ( REPLACE, LOAD DATAFILE REPLACE,
 				INSERT ON DUPLICATE KEY UPDATE). */
-                /* 如果是 insert on duplicate key update，即如果存在相同索引值时更新这条记录时，设置排他NOT GAP锁，因为要执行更新这条重复记录的操作,在5.7.21中加锁的类型则会根据ISO来使用NOT GAP或者 ORDINARY锁 */
+                /* 如果是 insert on duplicate key update，即如果存在相同索引值时更新这条记录时，设置排他NOT GAP锁，因为要执行更新这条重复记录的操作,在5.7.21中加锁的类型则会根据ISO来使用NOT GAP或者 ORDINARY锁
+                 * 在这条记录上加锁是为了保证该记录已被事务提交(可能涉及插入记录的隐式锁转换)*/
 				err = row_ins_set_exclusive_rec_lock(
 					LOCK_REC_NOT_GAP,
 					btr_cur_get_block(cursor),
 					rec, cursor->index, offsets, thr);
 			} else {
-               /* 对于没有on DUPLICATE update情况时，为相同主键重复冲突的记录加共享NOT GAP锁，因为不用更新这条记录,在5.7.21中加锁的类型则会根据ISO来使用NOT GAP或者 ORDINARY锁 */
+               /* 对于没有on DUPLICATE update情况时，为相同主键重复冲突的记录加共享NOT GAP锁，因为不用更新这条记录,在5.7.21中加锁的类型则会根据ISO来使用NOT GAP或者 ORDINARY锁
+                * 在这条记录上加锁是为了保证该记录已被事务提交(可能涉及插入记录的隐式锁转换)*/
 				err = row_ins_set_shared_rec_lock(
 					LOCK_REC_NOT_GAP,
 					btr_cur_get_block(cursor), rec,
@@ -2374,7 +2378,7 @@ row_ins_duplicate_error_in_clust(
 			default:
 				goto func_exit;
 			}
-            /* 检查记录插入是否会有主键重复冲突 */
+            /* 检查记录插入是否会有主键重复冲突(保证唯一性约束) */
 			if (row_ins_dupl_error_with_rec(
 				    rec, entry, cursor->index, offsets)) {
 duplicate:

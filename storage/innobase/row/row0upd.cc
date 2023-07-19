@@ -2131,6 +2131,9 @@ srv_mbr_print(const byte* data)
 
 /***********************************************************//**
 Updates a secondary index entry of a row.
+ 更新二级索引：
+ 1、标记删除原记录
+ 2、插入更新后的新记录
 @return DB_SUCCESS if operation successfully completed, else error
 code or DB_LOCK_WAIT */
 static MY_ATTRIBUTE((warn_unused_result))
@@ -2309,6 +2312,7 @@ row_upd_sec_index_entry(
 		row_ins_sec_index_entry() below */
 		if (!rec_get_deleted_flag(
 			    rec, dict_table_is_comp(index->table))) {
+            /*标记删除*/
 			err = btr_cur_del_mark_set_sec_rec(
 				flags, btr_cur, TRUE, thr, &mtr);
 			if (err != DB_SUCCESS) {
@@ -2351,6 +2355,7 @@ row_upd_sec_index_entry(
 	ut_a(entry);
 
 	/* Insert new index entry */
+    /*插入更新后的新记录*/
 	err = row_ins_sec_index_entry(index, entry, thr, false);
 
 func_exit:
@@ -2513,11 +2518,11 @@ row_upd_clust_rec_by_insert(
 	btr_cur	= btr_pcur_get_btr_cur(pcur);
 
 	heap = mem_heap_create(1000);
-
+    /*生成要插入的记录结构(主键值更新时，要先删除，再插入一条新记录，这生成的就是要插入的新记录结构)*/
 	entry = row_build_index_entry_low(node->upd_row, node->upd_ext,
 					  index, heap, ROW_BUILD_FOR_INSERT);
 	ut_ad(dtuple_get_info_bits(entry) == 0);
-
+    /*对上面生成的记录结构更新事务ID*/
 	row_upd_index_entry_sys_field(entry, index, DATA_TRX_ID, trx->id);
 
 	switch (node->state) {
@@ -2549,7 +2554,7 @@ row_upd_clust_rec_by_insert(
 							   offsets)));
 			goto check_fk;
 		}
-
+        /*对主键索引记录标记删除*/
 		err = btr_cur_del_mark_set_clust_rec(
 			flags, btr_cur_get_block(btr_cur), rec, index, offsets,
 			thr, node->row, mtr);
@@ -2593,7 +2598,7 @@ check_fk:
 	}
 
 	mtr_commit(mtr);
-
+    /*插入新的主键索引记录(和insert语句插入主键索引记录相同，调用同一接口)*/
 	err = row_ins_clust_index_entry(
 		index, entry, thr,
 		entry->get_n_ext(), false);
@@ -2606,7 +2611,7 @@ check_fk:
 
 /***********************************************************//**
 Updates a clustered index record of a row when the ordering fields do
-not change.
+not change.主键值没有变化时的主键记录更新操作
 @return DB_SUCCESS if operation successfully completed, else error
 code or DB_LOCK_WAIT */
 static MY_ATTRIBUTE((warn_unused_result))
@@ -2649,13 +2654,16 @@ row_upd_clust_rec(
 	/* Try optimistic updating of the record, keeping changes within
 	the page; we do not check locks because we assume the x-lock on the
 	record to update */
-
+    /*注意：当前函数的调用前提是主键值不变
+     * 如果没有索引字段(包括主键字段和二级索引字段)需要更新 且 记录中的字段大小没有变化(但是在update语句时cmpl_info似乎只会为0或1，所以下面的操作并不会执行，但是乐观更新时会进行原地更新判断，进行原地更新操作)：
+     * 则进行就地更新(直接在原记录上修改，加新版本)*/
 	if (node->cmpl_info & UPD_NODE_NO_SIZE_CHANGE) {
 		err = btr_cur_update_in_place(
 			flags | BTR_NO_LOCKING_FLAG, btr_cur,
 			offsets, node->update,
 			node->cmpl_info, thr, thr_get_trx(thr)->id, mtr);
 	} else {
+        /*否则尝试乐观更新(在同一个页面中更新记录)，乐观更新里面也会判断是否满足就地更新(索引记录中的字段大小没有变化)*/
 		err = btr_cur_optimistic_update(
 			flags | BTR_NO_LOCKING_FLAG, btr_cur,
 			&offsets, offsets_heap, node->update,
@@ -2706,7 +2714,7 @@ row_upd_clust_rec(
 	if (!heap) {
 		heap = mem_heap_create(1024);
 	}
-
+    /*如果就地更新和乐观更新失败(目前来看前面的就地更新并不会发生，乐观更新里面包含了就地更新的判断和操作)，则进行悲观更新(不能在相同页面更新，比如可能更新的记录太大，页面容纳不下)*/
 	err = btr_cur_pessimistic_update(
 		flags | BTR_NO_LOCKING_FLAG | BTR_KEEP_POS_FLAG, btr_cur,
 		&offsets, offsets_heap, heap, &big_rec,
@@ -2716,6 +2724,7 @@ row_upd_clust_rec(
 		ut_a(err == DB_SUCCESS);
 
 		DEBUG_SYNC_C("before_row_upd_extern");
+        /*存储溢出列*/
 		err = btr_store_big_rec_extern_fields(
 			pcur, node->update, offsets, big_rec, mtr,
 			BTR_STORE_UPDATE);
@@ -2739,7 +2748,7 @@ success:
 				old_v_row);
 		}
 	}
-
+    /*提交mtr*/
 	mtr_commit(mtr);
 func_exit:
 	if (heap) {
@@ -2838,7 +2847,7 @@ row_upd_clust_step(
 	pcur = node->pcur;
 
 	/* We have to restore the cursor to its position */
-
+    /*开启mtr*/
 	mtr_start(&mtr);
 	mtr.set_named_space(index->space);
 
@@ -2915,7 +2924,7 @@ row_upd_clust_step(
 			return(err);
 		}
 	}
-
+    /*获取记录*/
 	rec = btr_pcur_get_rec(pcur);
 	offsets = rec_get_offsets(rec, index, offsets_,
 				  ULINT_UNDEFINED, &heap);
@@ -2935,7 +2944,7 @@ row_upd_clust_step(
 				      page_rec_get_heap_no(rec)));
 
 	/* NOTE: the following function calls will also commit mtr */
-
+    /*如果是删除操作，则对主键记录更新操作就是为主键记录添加删除标记*/
 	if (node->is_delete) {
 		err = row_upd_del_mark_clust_rec(
 			flags, node, index, offsets, thr, referenced, &mtr);
@@ -2958,7 +2967,9 @@ row_upd_clust_step(
 				     UT_LIST_GET_FIRST(node->columns));
 		row_upd_eval_new_vals(node->update);
 	}
-
+    /*如果没有索引值需要更新(即主键值和二级索引字段值都没有变化)：
+     * 则主键索引只需要执行主键索引记录更新操作
+     * */
 	if (node->cmpl_info & UPD_NODE_NO_ORD_CHANGE) {
 
 		err = row_upd_clust_rec(
@@ -2968,7 +2979,10 @@ row_upd_clust_step(
 
 	row_upd_store_row(node, trx->mysql_thd,
 			  thr->prebuilt ? thr->prebuilt->m_mysql_table : NULL);
-
+    /*如果有索引值需要更新，且主键索引中主键值变化：
+     * 对主键索引记录先删除(标记删除)再插入一条新索引记录
+     * 再标记更新状态为UPD_NODE_UPDATE_ALL_SEC，表示后面需要更新所有的二级索引记录(因为对应的主键值变化了)
+     * */
 	if (row_upd_changes_ord_field_binary(index, node->update, thr,
 					     node->row, node->ext)) {
 
@@ -2990,9 +3004,13 @@ row_upd_clust_step(
 
 			goto exit_func;
 		}
-
+        //表示后面需要更新所有的二级索引记录(因为对应的主键值变化了)
 		node->state = UPD_NODE_UPDATE_ALL_SEC;
 	} else {
+        /*如果有索引值需要更新，且主键索引中主键值没有变化(即索引中只有二级索引值需要更新)：
+         * 则执行主键更新操作
+         * 且把更新状态置为UPD_NODE_UPDATE_SOME_SEC(表示后续要去更新二级索引字段有更新的二级索引)
+         * */
 		err = row_upd_clust_rec(
 			flags, node, index, offsets, &heap, thr, &mtr);
 
@@ -3000,7 +3018,7 @@ row_upd_clust_step(
 
 			goto exit_func;
 		}
-
+        //表示后续要去更新二级索引字段有更新的二级索引
 		node->state = UPD_NODE_UPDATE_SOME_SEC;
 	}
 
@@ -3042,12 +3060,16 @@ row_upd(
 
 		/* We do not get the cmpl_info value from the MySQL
 		interpreter: we must calculate it on the fly: */
-
+        /*查看是否需要更新索引(指的是索引排序用到的字段是否更改了，包括主键索引)：
+         * 1、delete语句则会更新所有索引(主键和所有二级索引)
+         * 2、update语句中更新的了主键值或者二级索引字段
+         * */
 		if (node->is_delete
 		    || row_upd_changes_some_index_ord_field_binary(
 			    node->table, node->update)) {
+
 			node->cmpl_info = 0;
-		} else {
+		} else {/*没有索引字段需要更新*/
 			node->cmpl_info = UPD_NODE_NO_ORD_CHANGE;
 		}
 	}
@@ -3056,8 +3078,8 @@ row_upd(
 	case UPD_NODE_UPDATE_CLUSTERED:
 	case UPD_NODE_INSERT_CLUSTERED:
 		if (!dict_table_is_intrinsic(node->table)) {
-			log_free_check();
-		}
+			log_free_check();//检查是否需要刷新日志缓冲区或新的检查点
+		}/*更新主键索引*/
 		err = row_upd_clust_step(node, thr);
 
 		if (err != DB_SUCCESS) {
@@ -3085,7 +3107,7 @@ row_upd(
 		if (!node->index) {
 			break;
 		}
-
+        /*再更新二级索引*/
 		if (node->index->type != DICT_FTS) {
 			err = row_upd_sec_step(node, thr);
 

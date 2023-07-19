@@ -776,7 +776,7 @@ bool mysql_update(THD *thd,
       table->file->print_error(error, error_flags);
       goto exit_without_my_ok;
     }
-
+    /*尝试开启半一致性读标记(当ISO<=RC时才可以开启半一致性读)*/
     table->file->try_semi_consistent_read(1);
     if ((error= init_read_record(&info, thd, NULL, &qep_tab, 0, 1, FALSE)))
       goto exit_without_my_ok;
@@ -805,6 +805,7 @@ bool mysql_update(THD *thd,
       will_batch= FALSE;
     }
     else
+        //innodb似乎没有实现这个接口
       will_batch= !table->file->start_bulk_update();
 
     if ((table->file->ha_table_flags() & HA_READ_BEFORE_WRITE_REMOVAL) &&
@@ -816,13 +817,15 @@ bool mysql_update(THD *thd,
 
     while (true)
     {
+        /*通过row_search_mvcc加锁读读取记录*/
       error= info.read_record(&info);
       if (error || thd->killed)
         break;
       thd->inc_examined_row_count(1);
       bool skip_record;
-      if ((!qep_tab.skip_record(thd, &skip_record) && !skip_record))
+      if ((!qep_tab.skip_record(thd, &skip_record) && !skip_record))//校验查询的记录是否满足where条件，满足则进行更新操作，不满足则执行解锁操作(是否解锁根据ISO？？待确认)。。。
       {
+          /*如果作了半一致性读，说明没有加锁成功，则重新读取重新加锁*/
         if (table->file->was_semi_consistent_read())
           continue;  /* repeat the read of the same row if it still exists */
 
@@ -832,7 +835,7 @@ bool mysql_update(THD *thd,
           break; /* purecov: inspected */
 
         found++;
-
+        /*比对整行数据和需要修改后的行数据是否相同，不相同则不需要进行以下更新操作*/
         if (!records_are_comparable(table) || compare_records(table))
         {
           if ((res= table_list->view_check_option(thd)) != VIEW_CHECK_OK)
@@ -854,6 +857,9 @@ bool mysql_update(THD *thd,
           */
           update.set_function_defaults(table);
 
+          /*innodb中will_batch一直为false,也没有实现start_bulk_update，只有单条更新，没有批量更新
+           * 所以下面的ha_bulk_update_row并不会执行
+           * */
           if (will_batch)
           {
             /*
@@ -882,6 +888,7 @@ bool mysql_update(THD *thd,
               call then it should be included in the count of dup_key_found
               and error should be set to 0 (only if these errors are ignored).
             */
+            /*批量更新记录，在Innodb中似乎不会执行到这一步，因为will_batch一直为false*/
             error= table->file->ha_bulk_update_row(table->record[1],
                                                    table->record[0],
                                                    &dup_key_found);
@@ -891,6 +898,7 @@ bool mysql_update(THD *thd,
           else
           {
             /* Non-batched update */
+            /*更新单行*/
             error= table->file->ha_update_row(table->record[1],
                                               table->record[0]);
           }
@@ -981,6 +989,7 @@ bool mysql_update(THD *thd,
         this case the transaction might have been rolled back already.
       */
       else if (!thd->is_error())
+        /*筛选条件不符合，尝试解锁(当加了锁(半一致性读可能没有加锁)&&ISO<=RC才真正去解锁)*/
         table->file->unlock_row();
       else
       {
@@ -2912,7 +2921,7 @@ bool Sql_cmd_update::try_single_table_update(THD *thd,
       mysql_update_prepare_table(thd, select_lex) ||
       run_before_dml_hook(thd))
     return true;
-
+  /*判断是否是涉及到多张表*/
   if (!all_tables->is_multiple_tables())
   {
     /* Push ignore / strict error handler */
@@ -3055,11 +3064,13 @@ bool Sql_cmd_update::execute(THD *thd)
   }
 
   bool switch_to_multitable;
+  //尝试单表更新，如果不能进行单表更新，则进行多表更新操作
   if (try_single_table_update(thd, &switch_to_multitable))
     return true;
   if (switch_to_multitable)
   {
     sql_command= SQLCOM_UPDATE_MULTI;
+    //多表更新
     return execute_multi_table_update(thd);
   }
   return false;

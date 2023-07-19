@@ -8199,6 +8199,7 @@ int handler::ha_update_row(const uchar *old_data, uchar *new_data)
   int error;
   assert(table_share->tmp_table != NO_TMP_TABLE ||
          m_lock_type == F_WRLCK);
+  /*binlog函数？*/
   Log_func *log_func= Update_rows_log_event::binlog_row_logging_function;
 
   /*
@@ -8221,11 +8222,12 @@ int handler::ha_update_row(const uchar *old_data, uchar *new_data)
                   return(HA_ERR_CRASHED););
 
   MYSQL_TABLE_IO_WAIT(PSI_TABLE_UPDATE_ROW, active_index, error,
-    { error= update_row(old_data, new_data);})
+    { error= update_row(old_data, new_data);})//更新一行
 
   MYSQL_UPDATE_ROW_DONE(error);
   if (unlikely(error))
     DBUG_RETURN(error);
+  /*写binlog？*/
   if (unlikely((error= binlog_log_row(table, old_data, new_data, log_func))))
     DBUG_RETURN(error);
   DBUG_RETURN(0);

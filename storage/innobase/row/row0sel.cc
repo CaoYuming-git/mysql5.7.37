@@ -4885,7 +4885,7 @@ row_search_mvcc(
 	delete-marked versions of a record where only the primary key
 	values differ: thus in a secondary index we must use next-key
 	locks when locking delete-marked records. */
-    /*判断是否是唯一性查询，如果是，则打上唯一性查询标记，且如果当前记录不是首次查询，则可直接结束查询(也可说是对唯一性查询的一种优化)
+    /*判断是否是唯一性查询，如果是，则打上唯一性查询标记，且如果当前记录不是首次查询，则可直接结束查询(唯一性查询不加锁优化)
      * 唯一性查询也是精确匹配，但是由于此处有结束查询的判断，所以对于唯一性查询，它的第一条不匹配记录即使在ISO>=RR时也不会加上GAP锁(唯一性查询的优化)
      * 需要满足 精确匹配 && 索引是唯一索引 && 所有索引列用上 && (主键索引 || 搜索条件不是NULL)
      * */
@@ -5722,7 +5722,7 @@ no_gap_lock:
 				goto lock_wait_or_error;
 			}
 
-            /*进行半一致性读操作，获取该记录的最新的已提交(记录所属的事务已提交)版本*/
+            /*进行半一致性读操作，获取该记录在主键索引中的最新的已提交(记录所属的事务已提交)版本，RC隔离级别就是获取已提交事务的记录，所以逻辑没有问题*/
 			/* The following call returns 'offsets'
 			associated with 'old_vers' */
 			row_sel_build_committed_vers_for_mysql(
