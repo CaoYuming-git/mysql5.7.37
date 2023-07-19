@@ -8510,6 +8510,7 @@ ha_innobase::unlock_row(void)
 
 	switch (m_prebuilt->row_read_type) {
 	case ROW_READ_WITH_LOCKS:
+        /*如果ISO>=RR,不解锁*/
 		if (!srv_locks_unsafe_for_binlog
 		    && m_prebuilt->trx->isolation_level
 		    > TRX_ISO_READ_COMMITTED) {
@@ -8517,9 +8518,11 @@ ha_innobase::unlock_row(void)
 		}
 		/* fall through */
 	case ROW_READ_TRY_SEMI_CONSISTENT:
+        /*说明没有做半一致性读，尝试解锁，row_unlock_for_mysql在ISO < RR时才解锁*/
 		row_unlock_for_mysql(m_prebuilt, FALSE);
 		break;
 	case ROW_READ_DID_SEMI_CONSISTENT:
+        /*作了半一致性读，说明没有加锁，不需要解锁*/
 		m_prebuilt->row_read_type = ROW_READ_TRY_SEMI_CONSISTENT;
 		break;
 	}

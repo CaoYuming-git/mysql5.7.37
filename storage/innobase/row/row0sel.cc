@@ -5713,6 +5713,8 @@ no_gap_lock:
 			prebuilt->new_rec_locks = 0;
             /*如果 是UPDATE/DELETE中打开了半一致性读标记 && 是主键 && 不是唯一性搜索 时进行半一致性读操作，否则等待加锁完成
              *只有ISO <= RC && 主键索引 && 非等值条件 UPDATE/DELETE操作时才可能使用半一致性读
+             *进行半一致性读取后会把row_read_type设置为ROW_READ_DID_SEMI_CONSISTENT，
+             *所以重新读的时候必须等待锁定，不能进行半一致性读了
              * */
 			if (UNIV_LIKELY(prebuilt->row_read_type
 					!= ROW_READ_TRY_SEMI_CONSISTENT)

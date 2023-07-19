@@ -3885,7 +3885,7 @@ btr_cur_update_in_place(
 	}
 
 	assert_block_ahi_valid(block);
-    /*更新记录*/
+    /*更新记录(在原记录上更新)*/
 	row_upd_rec_in_place(rec, index, offsets, update, page_zip);
 
 	if (is_hashed) {
@@ -4150,7 +4150,7 @@ any_extern:
 	}
     //更新记录所在页面的hash索引
 	btr_search_update_hash_on_delete(cursor);
-    //先删除记录(非标记删除)
+    //先真实删除记录(非标记删除)
 	page_cur_delete_rec(page_cursor, index, *offsets, mtr);
 
 	page_cur_move_to_prev(page_cursor);
@@ -4162,7 +4162,7 @@ any_extern:
 		row_upd_index_entry_sys_field(new_entry, index, DATA_TRX_ID,
 					      trx_id);
 	}
-    //再插入新记录到页中去
+    //再插入新记录到页中去(包含了对应的插入操作日志)
 	/* There are no externally stored columns in new_entry */
 	rec = btr_cur_insert_if_possible(
 		cursor, new_entry, offsets, heap, 0/*n_ext*/, mtr);

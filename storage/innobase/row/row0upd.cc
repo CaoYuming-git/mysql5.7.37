@@ -2355,7 +2355,7 @@ row_upd_sec_index_entry(
 	ut_a(entry);
 
 	/* Insert new index entry */
-    /*插入更新后的新记录*/
+    /*插入更新后的新记录(也会先尝试乐观插入，再进行悲观插入)*/
 	err = row_ins_sec_index_entry(index, entry, thr, false);
 
 func_exit:
@@ -2598,7 +2598,7 @@ check_fk:
 	}
 
 	mtr_commit(mtr);
-    /*插入新的主键索引记录(和insert语句插入主键索引记录相同，调用同一接口)*/
+    /*插入新的主键索引记录(和insert语句插入主键索引记录相同，调用同一接口，会先尝试乐观插入，再进行悲观插入)*/
 	err = row_ins_clust_index_entry(
 		index, entry, thr,
 		entry->get_n_ext(), false);
@@ -2656,7 +2656,9 @@ row_upd_clust_rec(
 	record to update */
     /*注意：当前函数的调用前提是主键值不变
      * 如果没有索引字段(包括主键字段和二级索引字段)需要更新 且 记录中的字段大小没有变化(但是在update语句时cmpl_info似乎只会为0或1，所以下面的操作并不会执行，但是乐观更新时会进行原地更新判断，进行原地更新操作)：
-     * 则进行就地更新(直接在原记录上修改，加新版本)*/
+     * 则进行就地更新(直接在原记录上修改，加新版本)
+     * 就地更新实际是在乐观更新btr_cur_optimistic_update中执行的，下面的就地更新并不会执行
+     * */
 	if (node->cmpl_info & UPD_NODE_NO_SIZE_CHANGE) {
 		err = btr_cur_update_in_place(
 			flags | BTR_NO_LOCKING_FLAG, btr_cur,
@@ -2714,7 +2716,8 @@ row_upd_clust_rec(
 	if (!heap) {
 		heap = mem_heap_create(1024);
 	}
-    /*如果就地更新和乐观更新失败(目前来看前面的就地更新并不会发生，乐观更新里面包含了就地更新的判断和操作)，则进行悲观更新(不能在相同页面更新，比如可能更新的记录太大，页面容纳不下)*/
+    /*如果就地更新和乐观更新失败(目前来看前面的就地更新并不会发生，乐观更新里面包含了就地更新的判断和操作)
+     * 则进行悲观更新(不能在一个页面中完成更新，比如可能更新的记录太大，页面容纳不下，需要页分裂)*/
 	err = btr_cur_pessimistic_update(
 		flags | BTR_NO_LOCKING_FLAG | BTR_KEEP_POS_FLAG, btr_cur,
 		&offsets, offsets_heap, heap, &big_rec,
@@ -2979,7 +2982,7 @@ row_upd_clust_step(
 
 	row_upd_store_row(node, trx->mysql_thd,
 			  thr->prebuilt ? thr->prebuilt->m_mysql_table : NULL);
-    /*如果有索引值需要更新，且主键索引中主键值变化：
+    /*如果主键索引中主键值变化：
      * 对主键索引记录先删除(标记删除)再插入一条新索引记录
      * 再标记更新状态为UPD_NODE_UPDATE_ALL_SEC，表示后面需要更新所有的二级索引记录(因为对应的主键值变化了)
      * */
@@ -3067,7 +3070,7 @@ row_upd(
 		if (node->is_delete
 		    || row_upd_changes_some_index_ord_field_binary(
 			    node->table, node->update)) {
-
+            /*有索引需要更新，值为0*/
 			node->cmpl_info = 0;
 		} else {/*没有索引字段需要更新*/
 			node->cmpl_info = UPD_NODE_NO_ORD_CHANGE;
@@ -3079,7 +3082,8 @@ row_upd(
 	case UPD_NODE_INSERT_CLUSTERED:
 		if (!dict_table_is_intrinsic(node->table)) {
 			log_free_check();//检查是否需要刷新日志缓冲区或新的检查点
-		}/*更新主键索引*/
+		}
+        /*更新主键索引*/
 		err = row_upd_clust_step(node, thr);
 
 		if (err != DB_SUCCESS) {
