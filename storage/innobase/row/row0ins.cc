@@ -1384,7 +1384,7 @@ row_ins_foreign_check_on_constraint(
 
 		/* Build the appropriate update vector which sets changing
 		foreign->n_fields first fields in rec to new values */
-
+        /*获取级联更新的信息*/
 		n_to_update = row_ins_cascade_calc_update_vec(
 			node, foreign, tmp_heap,
 			trx, &fts_col_affacted);
@@ -1450,7 +1450,7 @@ row_ins_foreign_check_on_constraint(
 	ut_a(cascade->pcur->rel_pos == BTR_PCUR_ON);
 
 	cascade->state = UPD_NODE_UPDATE_CLUSTERED;
-
+    /*级联更新操作*/
 	err = row_update_cascade_for_mysql(thr, cascade,
                                            foreign->foreign_table);
 
@@ -1571,16 +1571,21 @@ private:
 Checks if foreign key constraint fails for an index entry. Sets shared locks
 which lock either the success or the failure of the constraint. NOTE that
 the caller must have a shared latch on dict_operation_lock.
+ 检查外键约束，注意这里有两种检查：
+ 1、一种是检查子表，用于父表记录更新时，去级联更新子表的记录，check_ref传值为false,table传值为父表
+ 2、一种是检查父表，用于子表记录插入或者更新时，去检查父表中的记录是否存在，同时加锁，check_ref传值为true,table传值为子表
 @return DB_SUCCESS, DB_NO_REFERENCED_ROW, or DB_ROW_IS_REFERENCED */
 dberr_t
 row_ins_check_foreign_constraint(
 /*=============================*/
+    /*check_ref如果为false表示检查子表，如果为true表示检查父表*/
 	ibool		check_ref,/*!< in: TRUE if we want to check that
 				the referenced table is ok, FALSE if we
 				want to check the foreign key table */
 	dict_foreign_t*	foreign,/*!< in: foreign constraint; NOTE that the
 				tables mentioned in it must be in the
 				dictionary cache if they exist at all */
+	/*如果要检查子表(check_ref=false),table表示父表。如果要检查父表(check_ref=true)，table表示子表。*/
 	dict_table_t*	table,	/*!< in: if check_ref is TRUE, then the foreign
 				table, else the referenced table */
 	dtuple_t*	entry,	/*!< in: index entry for index */
@@ -1649,11 +1654,11 @@ row_ins_check_foreign_constraint(
 			goto exit_func;
 		}
 	}
-
+    /*如果是检查父表，check_table表示父表，check_index表示父表中被引用的索引*/
 	if (check_ref) {
 		check_table = foreign->referenced_table;
 		check_index = foreign->referenced_index;
-	} else {
+	} else {/*如果是检查子表，check_table表示子表，check_index表示子表中定义外键的索引*/
 		check_table = foreign->foreign_table;
 		check_index = foreign->foreign_index;
 	}
@@ -1696,7 +1701,7 @@ row_ins_check_foreign_constraint(
 	if (check_table != table) {
 		/* We already have a LOCK_IX on table, but not necessarily
 		on check_table */
-        /* 在父表加上意向排他锁 */
+        /* 在父表加上意向共享锁 */
 		err = lock_table(0, check_table, LOCK_IS, thr);
 
 		if (err != DB_SUCCESS) {
@@ -1712,12 +1717,12 @@ row_ins_check_foreign_constraint(
 	n_fields_cmp = dtuple_get_n_fields_cmp(entry);
 
 	dtuple_set_n_fields_cmp(entry, foreign->n_fields);
-
+    /*根据传参，定位到父表或者子表中记录所在位置*/
 	btr_pcur_open(check_index, entry, PAGE_CUR_GE,
 		      BTR_SEARCH_LEAF, &pcur, &mtr);
 
 	/* Scan index records and check if there is a matching record */
-
+    /*遍历所有父表(如果是检查父表)或者子表(如果是检查子表)中的外键的所有记录*/
 	do {
 		const rec_t*		rec = btr_pcur_get_rec(&pcur);
 		const buf_block_t*	block = btr_pcur_get_block(&pcur);
@@ -1748,9 +1753,9 @@ row_ins_check_foreign_constraint(
 				goto end_scan;
 			}
 		}
-        /* 比较外键和匹配的reference index上的记录是否相等 */
+        /* 比较父表(如果是检查父表)或者子表(如果是检查子表)中的外键对应的记录是否为外键关联的字段值是否一样 */
 		cmp = cmp_dtuple_rec(entry, rec, offsets);
-        /* 如果相等 */
+        /* 如果相等，即查询到记录 */
 		if (cmp == 0) {
 
 			ulint	lock_type;
@@ -1758,7 +1763,7 @@ row_ins_check_foreign_constraint(
 			lock_type = skip_gap_lock
 				? LOCK_REC_NOT_GAP
 				: LOCK_ORDINARY;
-            /* 如果reference index上的记录有删除标记，根据ISO为这条记录加上共享NOT GAP或者ORDINARY锁 */
+            /* 如果记录有删除标记，根据ISO为这条记录加上共享NOT GAP或者ORDINARY锁，结束检查 */
 			if (rec_get_deleted_flag(rec,
 						 rec_offs_comp(offsets))) {
 				err = row_ins_set_shared_rec_lock(
@@ -1772,10 +1777,11 @@ row_ins_check_foreign_constraint(
 					goto end_scan;
 				}
 			} else {
+				/*如果记录正常，没有删除*/
 				/* Found a matching record. Lock only
 				a record because we can allow inserts
 				into gaps */
-                /* 如果reference index上的记录正常，则为这条记录加上共享NOT GAP锁 */
+                /* 则为父表(如果是检查父表)或者子表(如果是检查子表)外键中的这条记录加上共享NOT GAP锁 */
 				err = row_ins_set_shared_rec_lock(
 					LOCK_REC_NOT_GAP, block,
 					rec, check_index, offsets, thr);
@@ -1787,7 +1793,7 @@ row_ins_check_foreign_constraint(
 				default:
 					goto end_scan;
 				}
-
+                /*如果是检查父表，则为父表中的记录加锁即可结束检查，因为不存在级联更新操作*/
 				if (check_ref) {
 					err = DB_SUCCESS;
 
@@ -1796,7 +1802,7 @@ row_ins_check_foreign_constraint(
 					/* There is an ON UPDATE or ON DELETE
 					condition: check them in a separate
 					function */
-
+                    /*如果是检查子表，且需要级联更新，则级联更新子表中的记录*/
 					err = row_ins_foreign_check_on_constraint(
 						thr, foreign, &pcur, entry,
 						&mtr);
@@ -1834,10 +1840,11 @@ row_ins_check_foreign_constraint(
 				}
 			}
 		} else {
+			/*如果不相等，说明没有查询到记录，这里应该是针对第一次执行循环的判断，用于判断是否父表中没有对应的记录，报告给用户对应的错误*/
 			ut_a(cmp < 0);
 
 			err = DB_SUCCESS;
-
+            /*如果ISO>=RR，需要加共享GAP锁*/
 			if (!skip_gap_lock) {
 				err = row_ins_set_shared_rec_lock(
 					LOCK_GAP, block,
@@ -1847,6 +1854,7 @@ row_ins_check_foreign_constraint(
 			switch (err) {
 			case DB_SUCCESS_LOCKED_REC:
 			case DB_SUCCESS:
+				/*如果是检查父表，找不到父表中的记录，报告给用户对应的错误*/
 				if (check_ref) {
 					err = DB_NO_REFERENCED_ROW;
 					row_ins_foreign_report_add_err(
@@ -1951,13 +1959,14 @@ row_ins_check_foreign_constraints(
 
 	DEBUG_SYNC_C_IF_THD(thr_get_trx(thr)->mysql_thd,
 			    "foreign_constraint_check_for_ins");
-    /* 遍历所有外键 */
+    /* 遍历表中所有外键，找到本索引所在的外键 */
 	for (dict_foreign_set::iterator it = table->foreign_set.begin();
 	     it != table->foreign_set.end();
 	     ++it) {
 
 		foreign = *it;
-        /*只有当插入记录所在的索引树本身就是外键时，才会对这个外键进行真正的外键约束检查*/
+        /*找到本索引所在的外键
+         * 只有当插入记录所在的索引树本身就是外键时，才会对这个外键进行真正的外键约束检查*/
 		if (foreign->foreign_index == index) {
 			dict_table_t*	ref_table = NULL;
 			dict_table_t*   foreign_table = foreign->foreign_table;
@@ -1986,7 +1995,9 @@ row_ins_check_foreign_constraints(
 			we will release dict_operation_lock temporarily!
 			But the counter on the table protects the referenced
 			table from being dropped while the check is running. */
-            /*检查一个外键*/
+            /*检查父表记录是否存在，如果存在则加共享NOT GAP锁，不存在则报错
+             * 第一个参数为TRUE表示检查父表
+             * */
 			err = row_ins_check_foreign_constraint(
 				TRUE, foreign, table, entry, thr);
 
@@ -3298,7 +3309,7 @@ row_ins_clust_index_entry(
 	ulint	n_uniq;
 
 	DBUG_ENTER("row_ins_clust_index_entry");
-    //检查外键约束，如果有约束，还需要加锁
+    /*插入记录时，检查外键约束中的父表，如果父表记录不存在则报错，存在则加共享NOT GAP锁*/
 	if (!index->table->foreign_set.empty()) {
 		err = row_ins_check_foreign_constraints(
 			index->table, index, entry, thr);
@@ -3395,7 +3406,7 @@ row_ins_sec_index_entry(
 	DBUG_EXECUTE_IF("row_ins_sec_index_entry_timeout", {
 			DBUG_SET("-d,row_ins_sec_index_entry_timeout");
 			return(DB_LOCK_WAIT);});
-
+	/*插入记录时，检查外键约束中的父表，如果父表记录不存在则报错，存在则加共享NOT GAP锁*/
 	if (!index->table->foreign_set.empty()) {
 		err = row_ins_check_foreign_constraints(index->table, index,
 							entry, thr);
@@ -3471,7 +3482,9 @@ row_ins_index_entry(
 	DBUG_EXECUTE_IF("row_ins_index_entry_timeout", {
 			DBUG_SET("-d,row_ins_index_entry_timeout");
 			return(DB_LOCK_WAIT);});
-    /* 主键索引和二级索引插入，先尝试乐观（只修改叶子节点）插入，后尝试悲观（修改整个索引树）插入 http://mysql.taobao.org/monthly/2020/06/02/ */
+    /* 主键索引和二级索引插入，先尝试乐观（只修改叶子节点）插入，后尝试悲观（修改整个索引树）插入 http://mysql.taobao.org/monthly/2020/06/02/
+     * 插入过程会检查外键约束的父表，如果父表记录存在则加共享NOT GAP锁，不存在则报错
+     * */
 	if (dict_index_is_clust(index)) {
 		return(row_ins_clust_index_entry(index, entry, thr, 0, false));
 	} else {

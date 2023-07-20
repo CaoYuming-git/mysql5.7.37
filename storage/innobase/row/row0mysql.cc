@@ -2877,6 +2877,7 @@ run_again:
         DEBUG_SYNC_C("foreign_constraint_update_cascade");
 	TABLE *temp = thr->prebuilt->m_mysql_table;
 	thr->prebuilt->m_mysql_table = NULL ;
+    /*更新子表操作，相当于递归调用了，和正常更新操作相同*/
         row_upd_step(thr);
 	thr->prebuilt->m_mysql_table = temp;
         /* The recursive call for cascading update/delete happens

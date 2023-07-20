@@ -150,7 +150,7 @@ row_upd_index_is_referenced(
 	dict_table_t*	table		= index->table;
 	ibool		froze_data_dict	= FALSE;
 	ibool		is_referenced	= FALSE;
-
+    /*如果引用本表(父表)的外键约束集合为空，则本表中的该索引一定没有被引用*/
 	if (table->referenced_set.empty()) {
 		return(FALSE);
 	}
@@ -164,7 +164,7 @@ row_upd_index_is_referenced(
 		= std::find_if(table->referenced_set.begin(),
 			       table->referenced_set.end(),
 			       dict_foreign_with_index(index));
-
+    /*去引用本表(父表)的外键约束集合中找到引用本索引的外键约束*/
 	is_referenced = (it != table->referenced_set.end());
 
 	if (froze_data_dict) {
@@ -177,7 +177,7 @@ row_upd_index_is_referenced(
 /*********************************************************************//**
 Checks if possible foreign key constraints hold after a delete of the record
 under pcur.
-
+检查本索引(父表)被引用的所有外键约束
 NOTE that this function will temporarily commit mtr and lose the
 pcur position!
 
@@ -205,7 +205,7 @@ row_upd_check_references_constraints(
 	ibool		got_s_lock	= FALSE;
 
 	DBUG_ENTER("row_upd_check_references_constraints");
-
+    /*referenced_set表示外键引用到本表的外键集合，如果未空，则说明本表不是任何表的父表，所以不需要级联更新子表操作*/
 	if (table->referenced_set.empty()) {
 		DBUG_RETURN(DB_SUCCESS);
 	}
@@ -233,18 +233,19 @@ row_upd_check_references_constraints(
 
 	DEBUG_SYNC_C_IF_THD(thr_get_trx(thr)->mysql_thd,
 			    "foreign_constraint_check_for_insert");
-
+    /*遍历所有引用本表(父表)的外键约束(子表referenced_set)*/
 	for (dict_foreign_set::iterator it = table->referenced_set.begin();
 	     it != table->referenced_set.end();
 	     ++it) {
-
+        //每个引用到本索引的外键(子表)
 		foreign = *it;
 
 		/* Note that we may have an update which updates the index
 		record, but does NOT update the first fields which are
 		referenced in a foreign key constraint. Then the update does
 		NOT break the constraint. */
-
+        /*找到引用本索引的外键约束 && (删除本索引记录 || 本索引被引用的字段变化了)
+         * 即本索引的索引字段修改了，且有外键引用本索引字段，所以需要进行级联更新操作？*/
 		if (foreign->referenced_index == index
 		    && (node->is_delete
 			|| row_upd_changes_first_fields_binary(
@@ -291,7 +292,9 @@ row_upd_check_references_constraints(
                         if (foreign_table) {
 				os_atomic_increment_ulint(&foreign_table->n_foreign_key_checks_running, 1);
 			}
-
+            /*检查外键约束中的子表，对子表进行级联更新
+             * 第一个参数为FALSE表示检查子表
+             * */
 			err = row_ins_check_foreign_constraint(
 				FALSE, foreign, table, entry, thr);
 
@@ -2160,7 +2163,7 @@ row_upd_sec_index_entry(
 	ut_ad(trx->id != 0);
 
 	index = node->index;
-
+    /*当前索引(父表中)是否被其他字表的外键(子表)字段所引用*/
 	referenced = row_upd_index_is_referenced(index, trx);
 
 	heap = mem_heap_create(1024);
@@ -2321,7 +2324,7 @@ row_upd_sec_index_entry(
 		}
 
 		ut_ad(err == DB_SUCCESS);
-
+        /*如果有外键(子表)引用本表(父表)中的本索引*/
 		if (referenced) {
 
 			ulint*	offsets;
@@ -2332,6 +2335,8 @@ row_upd_sec_index_entry(
 
 			/* NOTE that the following call loses
 			the position of pcur ! */
+            /*检查外键约束中的子表，进行子表级联更新
+             * 因为，二级索引可能变化了*/
 			err = row_upd_check_references_constraints(
 				node, &pcur, index->table,
 				index, offsets, thr, &mtr);
@@ -2355,7 +2360,8 @@ row_upd_sec_index_entry(
 	ut_a(entry);
 
 	/* Insert new index entry */
-    /*插入更新后的新记录(也会先尝试乐观插入，再进行悲观插入)*/
+    /*插入更新后的新记录(和insert语句插入主键索引记录相同，调用同一接口，会先尝试乐观插入，再进行悲观插入)
+     * 插入过程也会检查外键约束中的父表，如果父表记录存在则加共享NOT GAP锁，不存在则报错*/
 	err = row_ins_sec_index_entry(index, entry, thr, false);
 
 func_exit:
@@ -2587,7 +2593,8 @@ check_fk:
 		if (referenced) {
 			/* NOTE that the following call loses
 			the position of pcur ! */
-
+            /*检查外键约束中的子表，进行子表级联更新
+             * 因为主键值变化了*/
 			err = row_upd_check_references_constraints(
 				node, pcur, table, index, offsets, thr, mtr);
 
@@ -2598,7 +2605,8 @@ check_fk:
 	}
 
 	mtr_commit(mtr);
-    /*插入新的主键索引记录(和insert语句插入主键索引记录相同，调用同一接口，会先尝试乐观插入，再进行悲观插入)*/
+    /*插入新的主键索引记录(和insert语句插入主键索引记录相同，调用同一接口，会先尝试乐观插入，再进行悲观插入)
+     * 插入过程也会检查外键约束中的父表，如果父表记录存在则加共享NOT GAP锁，不存在则报错*/
 	err = row_ins_clust_index_entry(
 		index, entry, thr,
 		entry->get_n_ext(), false);
@@ -2802,13 +2810,14 @@ row_upd_del_mark_clust_rec(
 
 	/* Mark the clustered index record deleted; we do not have to check
 	locks, because we assume that we have an x-lock on the record */
-
+    /*标记删除记录*/
 	err = btr_cur_del_mark_set_clust_rec(
 		flags, btr_cur_get_block(btr_cur), btr_cur_get_rec(btr_cur),
 		index, offsets, thr, node->row, mtr);
 	if (err == DB_SUCCESS && referenced) {
 		/* NOTE that the following call loses the position of pcur ! */
-
+        /*检查外键约束中的子表，进行子表级联更新
+         * 因为父表中的记录删除了*/
 		err = row_upd_check_references_constraints(
 			node, pcur, index->table, index, offsets, thr, mtr);
 	}
