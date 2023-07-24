@@ -2136,7 +2136,7 @@ srv_mbr_print(const byte* data)
 Updates a secondary index entry of a row.
  更新二级索引：
  1、标记删除原记录
- 2、插入更新后的新记录
+ 2、插入更新后的新记录(更新操作才有插入，删除操作没有)
 @return DB_SUCCESS if operation successfully completed, else error
 code or DB_LOCK_WAIT */
 static MY_ATTRIBUTE((warn_unused_result))
@@ -2346,7 +2346,8 @@ row_upd_sec_index_entry(
 
 	btr_pcur_close(&pcur);
 	mtr_commit(&mtr);
-
+    /*如果是删除操作，则退出。
+     * 即没有后续的插入记录操作*/
 	if (node->is_delete || err != DB_SUCCESS) {
 
 		goto func_exit;
@@ -2956,7 +2957,7 @@ row_upd_clust_step(
 				      page_rec_get_heap_no(rec)));
 
 	/* NOTE: the following function calls will also commit mtr */
-    /*如果是删除操作，则对主键记录更新操作就是为主键记录添加删除标记*/
+    /*如果是删除操作，则对主键记录更新操作就是只需要为主键记录添加删除标记即可*/
 	if (node->is_delete) {
 		err = row_upd_del_mark_clust_rec(
 			flags, node, index, offsets, thr, referenced, &mtr);
@@ -2968,6 +2969,8 @@ row_upd_clust_step(
 
 		goto exit_func;
 	}
+
+    //后面就是更新操作的不同处理方式
 
 	/* If the update is made for MySQL, we already have the update vector
 	ready, else we have to do some evaluation: */

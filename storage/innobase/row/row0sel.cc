@@ -5711,8 +5711,8 @@ no_gap_lock:
 			ut_ad(!dict_index_is_spatial(index));
 			/* Never unlock rows that were part of a conflict. */
 			prebuilt->new_rec_locks = 0;
-            /*如果 是UPDATE/DELETE中打开了半一致性读标记 && 是主键 && 不是唯一性搜索 时进行半一致性读操作，否则等待加锁完成
-             *只有ISO <= RC && 主键索引 && 非等值条件 UPDATE/DELETE操作时才可能使用半一致性读
+            /*如果 打开了半一致性读标记(mysql官方文档说是在update和delete操作是可能会开启，但是在innodb引擎中只有UPDATE操作会在ISO<=RC时才会开启半一致性读) && 是主键 && 不是唯一性搜索 时进行半一致性读操作，否则等待加锁完成
+             *只有ISO <= RC && 主键索引 && 非等值条件 UPDATE操作时才可能使用半一致性读
              *进行半一致性读取后会把row_read_type设置为ROW_READ_DID_SEMI_CONSISTENT，
              *所以重新读的时候必须等待锁定，不能进行半一致性读了
              * */

@@ -2663,6 +2663,7 @@ error:
 }
 
 /** Does an update or delete of a row for MySQL.
+ * 更新和删除操作都是调用这个函数
 @param[in]	mysql_rec	row in the MySQL format
 @param[in,out]	prebuilt	prebuilt struct in MySQL handle
 @return error code or DB_SUCCESS */

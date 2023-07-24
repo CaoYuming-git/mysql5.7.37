@@ -71,6 +71,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
 
   uint usable_index= MAX_KEY;
   SELECT_LEX *const select_lex= thd->lex->select_lex;
+  /*语法树中的order_list：order排序方式*/
   ORDER *order= select_lex->order_list.first;
   TABLE_LIST *const table_list= select_lex->get_table_list();
   THD::killed_state killed_status= THD::NOT_KILLED;
@@ -93,7 +94,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
 
   TABLE_LIST *const delete_table_ref= table_list->updatable_base_table();
   TABLE *const table= delete_table_ref->table;
-
+  /*获取where条件*/
   Item *conds;
   if (select_lex->get_optimizable_conditions(thd, &conds, NULL))
     DBUG_RETURN(TRUE);
@@ -174,6 +175,8 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
       - We will not be binlogging this statement in row-based, and
       - there should be no delete triggers associated with the table.
   */
+  /*判断是否进行全表删除：innodb实现了此接口delete_all_rows，但是只用于内部表(优化器使用)，真正的用户表实际不调用此接口，还是调用的单行删除接口ha_delete_row
+   * 需要 没有limit && (没有where条件或者where条件恒为真)*/
   if (!using_limit && const_cond_result &&
       !(specialflag & SPECIAL_NO_NEW_FUNC) &&
       ((!thd->is_current_stmt_binlog_format_row() ||   /* not ROW binlog-format */
@@ -186,6 +189,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
 
     Modification_plan plan(thd, MT_DELETE, table,
                            "Deleting all rows", false, maybe_deleted);
+    /*如果是查询执行计划explain*/
     if (thd->lex->describe)
     {
       err= explain_single_table_modification(thd, &plan, select_lex);
@@ -201,6 +205,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
     }
 
     DBUG_PRINT("debug", ("Trying to use delete_all_rows()"));
+    /*调用全表删除接口(对于innodb来说不用于用户表记录的删除，只是用于内部表的删除，不用管)*/
     if (!(error=table->file->ha_delete_all_rows()))
     {
       /*
@@ -222,12 +227,12 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
     }
     /* Handler didn't support fast delete; Delete rows one by one */
   }
-
+  /*有删除条件*/
   if (conds)
   {
     COND_EQUAL *cond_equal= NULL;
     Item::cond_result result;
-
+    /*优化条件，优化成功返回false，优化失败返回true*/
     if (optimize_cond(thd, &conds, &cond_equal, select_lex->join_list,
                       &result))
       DBUG_RETURN(true);
@@ -303,6 +308,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
                                    qep_tab.table()->force_index) < 0;
       qep_tab.set_quick(qck);
     }
+    /*快速判断没有匹配的记录？*/
     if (zero_rows)
     {
       if (thd->lex->describe && !error && !thd->is_error())
@@ -349,11 +355,12 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
     }
   }
 
+  /*如果需要排序*/
   if (order)
   {
     table->update_const_key_parts(conds);
     order= simple_remove_const(order, conds);
-
+    /*need_sort 表示是否需要文件排序*/
     usable_index= get_index_for_order(order, &qep_tab, limit,
                                       &need_sort, &reverse);
   }
@@ -384,7 +391,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
 
     if (select_lex->active_options() & OPTION_QUICK)
       (void) table->file->extra(HA_EXTRA_QUICK);
-
+    /*如果需要文件排序，计算排序成本？*/
     if (need_sort)
     {
       ha_rows examined_rows, found_rows, returned_rows;
@@ -441,7 +448,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
       goto exit_without_my_ok;
 
     THD_STAGE_INFO(thd, stage_updating);
-
+    /*判断批量删除？will_batch是什么意思？不用管，innodb中没有实现start_bulk_delete此接口*/
     if (table->triggers &&
         table->triggers->has_triggers(TRG_EVENT_DELETE,
                                       TRG_ACTION_AFTER))
@@ -466,12 +473,15 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
         !(table->triggers && table->triggers->has_delete_triggers()) &&
         qep_tab.quick() && qep_tab.quick()->index != MAX_KEY)
       read_removal= table->check_read_removal(qep_tab.quick()->index);
-
+    /*循环读取记录,锁模式为排他锁
+     *对单行记录进行删除
+     * */
     while (!(error=info.read_record(&info)) && !thd->killed &&
            ! thd->is_error())
     {
       thd->inc_examined_row_count(1);
       // thd->is_error() is tested to disallow delete row on error
+      /* 对读取到的记录进行条件判断，满足筛选条件再进行删除操作*/
       if (!qep_tab.skip_record(thd, &skip_record) && !skip_record)
       {
 
@@ -482,7 +492,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
           error= 1;
           break;
         }
-
+        /*单行删除*/
         if (!(error= table->file->ha_delete_row(table->record[0])))
         {
           deleted++;
@@ -525,6 +535,7 @@ bool Sql_cmd_delete::mysql_delete(THD *thd, ha_rows limit)
         this case the transaction might have been rolled back already.
       */
       else if (!thd->is_error())
+        /*不满足筛选条件，尝试解锁*/
         table->file->unlock_row();  // Row failed selection, release lock on it
       else
         break;

@@ -5009,8 +5009,9 @@ btr_cur_del_mark_set_sec_rec(
 	/* We do not need to reserve search latch, as the
 	delete-mark flag is being updated in place and the adaptive
 	hash index does not depend on it. */
+	/*设置删除标记*/
 	btr_rec_set_deleted_flag(rec, buf_block_get_page_zip(block), val);
-
+    /*写redo log*/
 	btr_cur_del_mark_set_sec_rec_log(rec, val, mtr);
 
 	return(DB_SUCCESS);

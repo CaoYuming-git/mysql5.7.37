@@ -8448,6 +8448,9 @@ ha_innobase::delete_all_rows()
 	DBUG_ENTER("ha_innobase::delete_all_rows");
 
 	/* Currently enabled only for intrinsic tables. */
+    /*只用于内部表(优化器在查询处理期间存储临时数据的表，在过去一般为myisam/memory...引擎，后来是临时表)，所以用户表记录删除时是不调用此函数的
+     * 在 InnoDB 中创建了一种称为内部表的新类型的表，它具有放松的 MVCC 和 ACID 语义。这些表是一种特殊类型的临时 InnoDB 表，不执行任何 UNDO 或 REDO 日志记录(所有临时 InnoDB 表禁用 REDO 日志记录
+     * https://dev.mysql.com/blog-archive/mysql-5-7-innodb-intrinsic-tables/*/
 	if (!dict_table_is_intrinsic(m_prebuilt->table)) {
 		DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 	}
