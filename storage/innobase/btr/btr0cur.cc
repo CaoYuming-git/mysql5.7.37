@@ -2996,7 +2996,7 @@ btr_cur_ins_lock_and_undo(
 
 	if (!(flags & BTR_KEEP_SYS_FLAG)
 	    && !dict_table_is_intrinsic(index->table)) {
-        /* 更新记录上的trx_id和roll_ptr字段 */
+        /* 更新要插入的记录entry(此时entry只是一个数据结构，包含了记录的信息，但是还没有插入到页中去)上的trx_id和roll_ptr字段 */
 		row_upd_index_entry_sys_field(entry, index,
 					      DATA_ROLL_PTR, roll_ptr);
 	}
@@ -4154,7 +4154,7 @@ any_extern:
 	page_cur_delete_rec(page_cursor, index, *offsets, mtr);
 
 	page_cur_move_to_prev(page_cursor);
-
+    /*对要插入的记录的数据结构new_entry，更新roll_ptr到undo log、更新trx_id*/
 	if (!(flags & BTR_KEEP_SYS_FLAG)
 	    && !dict_table_is_intrinsic(index->table)) {
 		row_upd_index_entry_sys_field(new_entry, index, DATA_ROLL_PTR,
@@ -4457,7 +4457,7 @@ btr_cur_pessimistic_update(
 			goto err_exit;
 		}
 	}
-    /*更新roll_ptr到undo log、更新trx_id*/
+    /*对要插入的记录的数据结构new_entry，更新roll_ptr到undo log、更新trx_id*/
 	if (!(flags & BTR_KEEP_SYS_FLAG)
 	    && !dict_table_is_intrinsic(index->table)) {
 		row_upd_index_entry_sys_field(new_entry, index, DATA_ROLL_PTR,

@@ -6985,7 +6985,7 @@ build_template_field(
 	templ->mbminlen = dict_col_get_mbminlen(col);
 	templ->mbmaxlen = dict_col_get_mbmaxlen(col);
 	templ->is_unsigned = col->prtype & DATA_UNSIGNED;
-    /*当前查询的是二级索引 && 要查询的字段不在当前的二级索引中
+    /*当前查询的是二级索引 && 要查询的字段(包括where条件中的字段)不在当前的二级索引中
      *所以要回表，把need_to_access_clustered置为TRUE
      * */
 	if (!dict_index_is_clust(index)
