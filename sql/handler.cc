@@ -1787,7 +1787,7 @@ int ha_commit_trans(THD *thd, bool all, bool ignore_global_read_lock)
       error= 1;
       goto end;
     }
-
+    /*tc_log是分布式事务中的事务协调器(协调者)的日志*/
     if (!trn_ctx->no_2pc(trx_scope) && (trn_ctx->rw_ha_count(trx_scope) > 1))
       error= tc_log->prepare(thd, all);
   }
@@ -2345,7 +2345,7 @@ int ha_prepare_low(THD *thd, bool all)
   DBUG_ENTER("ha_prepare_low");
 
   if (ha_info)
-  {
+  { //遍历所有的事务管理器，对所有的事务管理器发起prepare操作。比如是开启了binlog的innnodb提交操作，则事务管理器有两个：binlog和innodb，分别对这两个事务管理器发起prepare操作
     for (; ha_info && !error; ha_info= ha_info->next())
     {
       int err= 0;
@@ -2357,7 +2357,7 @@ int ha_prepare_low(THD *thd, bool all)
       */
       if (!ha_info->is_trx_read_write())
         continue;
-      if ((err= ht->prepare(ht, thd, all)))
+      if ((err= ht->prepare(ht, thd, all)))//对每一个事务管理器发起prepare操作，其中binlog事务管理器是不做什么操作的
       {
         my_error(ER_ERROR_DURING_COMMIT, MYF(0), err);
         error= 1;

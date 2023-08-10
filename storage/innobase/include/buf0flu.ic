@@ -101,7 +101,7 @@ buf_flush_note_modification(
 
 	if (block->page.oldest_modification == 0) {
 		buf_pool_t*	buf_pool = buf_pool_from_block(block);
-
+        //将修改的block加入flush list链表
 		buf_flush_insert_into_flush_list(buf_pool, block, start_lsn);
 	} else {
 		ut_ad(block->page.oldest_modification <= start_lsn);

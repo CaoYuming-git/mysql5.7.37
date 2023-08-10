@@ -267,7 +267,7 @@ struct ReleaseBlocks {
 		buf_block_t*	block;
 
 		block = reinterpret_cast<buf_block_t*>(slot->object);
-
+        //将修改的脏页加入到flush list(由mtr_t:commit()->cmd.execute()->release_blocks()调用)，后台线程会对链表中的页进行刷盘
 		buf_flush_note_modification(block, m_start_lsn,
 					    m_end_lsn, m_flush_observer);
 	}
@@ -492,7 +492,7 @@ mtr_t::commit()
 
 		ut_ad(!srv_read_only_mode
 		      || m_impl.m_log_mode == MTR_LOG_NO_REDO);
-
+        //将mtr中的redo日志写入到log buffer中，再把修改的blocks加到 buffer_pool 的flush_list
 		cmd.execute();
 	} else {
 		cmd.release_all();
@@ -861,7 +861,7 @@ void
 mtr_t::Command::execute()
 {
 	ut_ad(m_impl->m_log_mode != MTR_LOG_NONE);
-
+    /*将redo log写到log buffer中去*/
 	if (const ulint len = prepare_write()) {
 		finish_write(len);
 	}
@@ -876,7 +876,7 @@ mtr_t::Command::execute()
 	log_mutex_exit();
 
 	m_impl->m_mtr->m_commit_lsn = m_end_lsn;
-
+    /*释放mtr中用到的block，包含将脏页加入到flush list，等待刷盘*/
 	release_blocks();
 
 	if (m_impl->m_made_dirty) {

@@ -1814,7 +1814,7 @@ inline bool is_loggable_xa_prepare(THD *thd)
                           thd->get_transaction()->xid_state()->
                           has_state(XID_STATE::XA_IDLE));
 }
-
+//binlog prepare操作，什么也不做
 static int binlog_prepare(handlerton *hton, THD *thd, bool all)
 {
   DBUG_ENTER("binlog_prepare");
@@ -8800,7 +8800,7 @@ TC_LOG::enum_result MYSQL_BIN_LOG::commit(THD *thd, bool all)
     }
     else if (real_trans && xid && trn_ctx->rw_ha_count(trx_scope) > 1 &&
              !trn_ctx->no_2pc(trx_scope))
-    {
+    {//添加xid事件到binlog?
       Xid_log_event end_evt(thd, xid);
       if (cache_mngr->trx_cache.finalize(thd, &end_evt))
         DBUG_RETURN(RESULT_ABORTED);
@@ -9615,7 +9615,7 @@ int MYSQL_BIN_LOG::ordered_commit(THD *thd, bool all, bool skip_commit)
     goto commit_stage;
   }
   DEBUG_SYNC(thd, "waiting_in_the_middle_of_flush_stage");
-  flush_error= process_flush_stage_queue(&total_bytes, &do_rotate,
+  flush_error= process_flush_stage_queue(&total_bytes, &do_rotate,//刷新binlog到磁盘
                                                  &wait_queue);
 
   if (flush_error == 0 && total_bytes > 0)

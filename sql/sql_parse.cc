@@ -4254,7 +4254,7 @@ end_with_restore_list:
     bool tx_release= (lex->tx_release == TVL_YES ||
                       (thd->variables.completion_type == 2 &&
                        lex->tx_release != TVL_NO));
-    if (trans_commit(thd))
+    if (trans_commit(thd))//提交事务操作
       goto error;
     thd->mdl_context.release_transactional_locks();
     /* Begin transaction with the same isolation level. */

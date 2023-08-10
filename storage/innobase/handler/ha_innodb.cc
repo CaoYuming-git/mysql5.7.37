@@ -17163,7 +17163,7 @@ innobase_get_at_most_n_mbchars(
 }
 
 /*******************************************************************//**
-This function is used to prepare an X/Open XA distributed transaction.
+This function is used to prepare an X/Open XA distributed transaction.innodb的分布式事务中的prepare操作
 @return 0 or error number */
 static
 int
@@ -17215,7 +17215,7 @@ innobase_xa_prepare(
 		this is an SQL statement end and autocommit is on */
 
 		ut_ad(trx_is_registered_for_2pc(trx));
-
+        //进行prepare操作
 		dberr_t	err = trx_prepare_for_mysql(trx);
 
 		ut_ad(err == DB_SUCCESS || err == DB_FORCED_ABORT);

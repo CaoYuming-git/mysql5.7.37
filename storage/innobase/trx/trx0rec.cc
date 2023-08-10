@@ -1922,7 +1922,7 @@ trx_undo_report_row_operation(
 	/* If object is temporary, disable REDO logging that is done to track
 	changes done to UNDO logs. This is feasible given that temporary tables
 	are not restored on restart. */
-	mtr_start(&mtr);
+	mtr_start(&mtr);//写undo log，开启一个mtr
 	dict_disable_redo_if_temporary(index->table, &mtr);
 	mutex_enter(&trx->undo_mutex);
 

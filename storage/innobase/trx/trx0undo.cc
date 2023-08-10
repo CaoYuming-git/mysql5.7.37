@@ -1785,7 +1785,7 @@ trx_undo_assign_undo(
 	rseg = undo_ptr->rseg;
 
 	ut_ad(mutex_own(&(trx->undo_mutex)));
-
+    //开启一个mtr
 	mtr_start(&mtr);
 	if (&trx->rsegs.m_noredo == undo_ptr) {
 		mtr.set_log_mode(MTR_LOG_NO_REDO);;
@@ -1862,7 +1862,7 @@ trx_undo_set_state_at_finish(
 
 	seg_hdr = undo_page + TRX_UNDO_SEG_HDR;
 	page_hdr = undo_page + TRX_UNDO_PAGE_HDR;
-
+    //更新回滚段(Undo页面链表的首个页面)的状态，对于innodb来说，如果开启了binlog，进行二阶段提交，则此时(更新前)状态为TRX_UNDO_PREPARE，会更新为TRX_UNDO_CACHED/TRX_UNDO_TO_FREE/TRX_UNDO_TO_PURGE，所以如果崩溃恢复的时候，查看undolog判断是否需要回滚时，如果状态为这三个，说明前面的redo log和binlog已经写入磁盘了，不需要回滚
 	if (undo->size == 1
 	    && mach_read_from_2(page_hdr + TRX_UNDO_PAGE_FREE)
 	       < TRX_UNDO_PAGE_REUSE_LIMIT) {
@@ -1908,7 +1908,7 @@ trx_undo_set_state_at_prepare(
 	undo_page = trx_undo_page_get(
 		page_id_t(undo->space, undo->hdr_page_no),
 		undo->page_size, mtr);
-
+    //Undo Log Segment Header的位置
 	seg_hdr = undo_page + TRX_UNDO_SEG_HDR;
 
 	if (rollback) {
@@ -1923,16 +1923,16 @@ trx_undo_set_state_at_prepare(
 	undo->state = TRX_UNDO_PREPARED;
 	undo->xid   = *trx->xid;
 	/*------------------------------*/
-
+    //更新页中(回滚段)的TRX_UNDO_STATE为TRX_UNDO_PREPARED
 	mlog_write_ulint(seg_hdr + TRX_UNDO_STATE, undo->state,
 			 MLOG_2BYTES, mtr);
-
+    //更新页中(回滚段)的TRX_UNDO_LAST_LOG为TRX_UNDO_PREPARED
 	offset = mach_read_from_2(seg_hdr + TRX_UNDO_LAST_LOG);
-	undo_header = undo_page + offset;
-
+	undo_header = undo_page + offset;//Undo Log Header的位置
+    //更新页中(回滚段)中Undo Log Header的TRX_UNDO_XID_EXISTS为TRUE，表示本undo 链表(回滚段)包含XID
 	mlog_write_ulint(undo_header + TRX_UNDO_XID_EXISTS,
 			 TRUE, MLOG_1BYTE, mtr);
-
+    //更新页中(回滚段)中Undo Log Header的XID字段
 	trx_undo_write_xid(undo_header, &undo->xid, mtr);
 
 	return(undo_page);

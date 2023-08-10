@@ -243,7 +243,7 @@ bool trans_commit(THD *thd)
   thd->server_status&=
     ~(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY);
   DBUG_PRINT("info", ("clearing SERVER_STATUS_IN_TRANS"));
-  res= ha_commit_trans(thd, TRUE);
+  res= ha_commit_trans(thd, TRUE);//innodb提交事务
   if (res == FALSE)
     if (thd->rpl_thd_ctx.session_gtids_ctx().
         notify_after_transaction_commit(thd))

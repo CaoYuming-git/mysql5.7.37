@@ -1778,7 +1778,7 @@ trx_finalize_for_fts(
 }
 
 /**********************************************************************//**
-If required, flushes the log to disk based on the value of
+If required, flushes the log to disk based on the value of 根据innodb_flush_log_at_trx_commit来刷盘
 innodb_flush_log_at_trx_commit. */
 static
 void
@@ -1822,7 +1822,7 @@ trx_flush_log_if_needed(
 	trx_t*	trx)	/*!< in/out: transaction */
 {
 	trx->op_info = "flushing log";
-	trx_flush_log_if_needed_low(lsn);
+	trx_flush_log_if_needed_low(lsn);//根据innodb_flush_log_at_trx_commit策略来刷redo log到磁盘
 	trx->op_info = "";
 }
 
@@ -2788,7 +2788,7 @@ trx_prepare_low(
 		world, at the serialization point of lsn. */
 
 		mutex_enter(&rseg->mutex);
-
+        //insert undo链表的第一个页面(即回滚段，里面包含了链表的信息),更新第一个页面中Undo Log Segment Header中的TRX_UNDO_STATE值，即表示本链表处在什么状态
 		if (undo_ptr->insert_undo != NULL) {
 
 			/* It is not necessary to obtain trx->undo_mutex here
@@ -2797,7 +2797,7 @@ trx_prepare_low(
 			trx_undo_set_state_at_prepare(
 				trx, undo_ptr->insert_undo, false, &mtr);
 		}
-
+        //update undo链表的第一个页面(即回滚段，里面包含了链表的信息),更新第一个页面中Undo Log Segment Header中的TRX_UNDO_STATE值，即表示本链表处在什么状态
 		if (undo_ptr->update_undo != NULL) {
 			trx_undo_set_state_at_prepare(
 				trx, undo_ptr->update_undo, false, &mtr);
@@ -2839,7 +2839,7 @@ trx_prepare(
 	ut_a(!trx->is_recovered);
 
 	if (trx->rsegs.m_redo.rseg != NULL && trx_is_redo_rseg_updated(trx)) {
-
+        //更新回滚段为prepare状态，以及xid
 		lsn = trx_prepare_low(trx, &trx->rsegs.m_redo, false);
 	}
 
@@ -2902,7 +2902,7 @@ trx_prepare(
 		gather behind one doing the physical log write to disk.
 
 		We must not be holding any mutexes or latches here. */
-
+        //刷新redo log到磁盘中去(根据innodb_flush_log_at_trx_commit设置的刷盘策略)
 		trx_flush_log_if_needed(lsn, trx);
 	}
 }
@@ -2924,7 +2924,7 @@ trx_prepare_for_mysql(trx_t* trx)
 	}
 
 	trx->op_info = "preparing";
-
+    //innodb在分布式事务中的prepare操作
 	trx_prepare(trx);
 
 	trx->op_info = "";
